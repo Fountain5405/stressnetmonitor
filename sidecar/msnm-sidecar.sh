@@ -19,7 +19,7 @@
 set -u
 export LC_ALL=C   # EPOCHREALTIME and numbers must use '.' as decimal point
 
-SIDECAR_VERSION="0.1.0"
+SIDECAR_VERSION="0.1.1"
 
 # ----------------------------------------------------------------- config ---
 
@@ -472,6 +472,11 @@ sample_monerod() {
 # ------------------------------------------------------------- RPC polling ---
 
 RPC_METHODS=(get_info get_last_block_header get_fee_estimate get_connections get_bans)
+# From the 2026 fee-scaling fork, monerod logs a "possible wallet fingerprint"
+# WARNING for any grace_blocks other than 1000 (omitted means 0). Asking with
+# 1000 also matches what wallets see. On a node still syncing below that fork
+# the request errors out, which is harmless: it is recorded as rpc_error.
+declare -A RPC_PARAMS=([get_fee_estimate]='{"grace_blocks":1000}')
 SEP=$'\x1e'
 MARK="${SEP}MSNM${SEP}"
 
@@ -487,7 +492,7 @@ collect_rpc() {
   for m in "${RPC_METHODS[@]}"; do
     ((first)) || args+=(--next); first=0
     args+=(-sS --max-time "$RPC_TIMEOUT" "${auth[@]}" -H 'Content-Type: application/json'
-           --data "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"$m\"}"
+           --data "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"$m\"${RPC_PARAMS[$m]:+,\"params\":${RPC_PARAMS[$m]}}}"
            -w "\n${MARK}%{http_code}${SEP}%{time_total}\n" "$M_RPC/json_rpc")
   done
   args+=(--next -sS --max-time "$RPC_TIMEOUT" "${auth[@]}" -H 'Content-Type: application/json'
