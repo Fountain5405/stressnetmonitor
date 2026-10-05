@@ -38,6 +38,7 @@ class RefState:
     cum_diff: int = 0
     last_ok: float = 0.0
     last_error: str | None = None
+    syncing: bool = False                  # not used as canonical while syncing
     hashes: dict[int, str] = field(default_factory=dict)
     headers: dict[int, dict] = field(default_factory=dict)  # recent headers, for metrics
 
@@ -57,7 +58,8 @@ class Chain:
 
     def canonical(self) -> RefState | None:
         now = time.time()
-        fresh = [r for r in self.refs.values() if r.top_height is not None and now - r.last_ok < self.stale_after]
+        fresh = [r for r in self.refs.values()
+                 if r.top_height is not None and not r.syncing and now - r.last_ok < self.stale_after]
         return max(fresh, key=lambda r: (r.cum_diff, r.top_height)) if fresh else None
 
     def tip(self) -> tuple[int | None, str | None]:
@@ -113,6 +115,14 @@ class Chain:
             ref.cum_diff = int(info.get("cumulative_difficulty", 0))
         ref.last_ok = now
         ref.last_error = None
+        was_syncing = ref.syncing
+        ref.syncing = bool(info.get("busy_syncing")) or info.get("synchronized") is False
+        if ref.syncing:
+            # Don't fetch headers for the whole history while it catches up.
+            if not was_syncing:
+                log.info("reference %s is syncing (height %d); not used as canonical", ref.cfg.id, top)
+            ref.top_height = None
+            return
         if ref.top_hash == top_hash and ref.top_height == top:
             return
         initial = ref.top_height is None

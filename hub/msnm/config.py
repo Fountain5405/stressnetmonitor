@@ -51,5 +51,8 @@ def load(path: str) -> Config:
     cfg.zmq_nodes = [ZmqNode(**z) for z in raw.get("zmq_nodes") or []]
     cfg.thresholds = Thresholds(**(raw.get("thresholds") or {}))
     if not cfg.references:
-        raise ValueError("at least one reference node is required")
+        # Data collection works without references; node states stay UNKNOWN
+        # until one is configured.
+        import logging
+        logging.getLogger(__name__).warning("no reference nodes configured: node states will be UNKNOWN")
     return cfg
