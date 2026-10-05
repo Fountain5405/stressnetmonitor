@@ -11,3 +11,4 @@ config.local.yaml
 .pytest_cache/
 hub.yaml
 msnm-data/
+.claude/
