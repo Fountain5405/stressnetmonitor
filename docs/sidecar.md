@@ -31,6 +31,32 @@ Your node appears in public dashboards only under the pseudonym the monitor oper
 
 ## Install
 
+1. **Get a token.** Ask the monitor operator (in the stressnet Matrix room) for a token and the hub URL. Each node gets its own token, so only registered nodes can send data.
+2. **Start `monerod` with the flags above** and let it sync.
+3. **Run the installer** from a clone of this repository, on the machine running `monerod`:
+
+   ```bash
+   git clone https://github.com/Fountain5405/stressnetmonitor.git
+   cd stressnetmonitor
+   sudo ./sidecar/install.sh
+   ```
+
+   It asks for the hub URL and token (the token isn't echoed). It then:
+   - finds your `monerod --testnet` process and the user it runs as;
+   - installs the sidecar, its config (`/etc/msnm-sidecar.conf`, mode 600) and a systemd service that runs as that user;
+   - runs `msnm-sidecar --check`, and starts the service only if everything passes;
+   - tells you if `monerod` is missing flags the sidecar needs. It never changes or restarts `monerod` itself.
+
+   If the check fails (for example, a mistyped token), nothing is changed. Fix the problem and run it again.
+
+To upgrade later: `git pull && sudo ./sidecar/install.sh`. Your config is kept.
+To remove everything: `sudo ./sidecar/install.sh --uninstall`.
+`sudo ./sidecar/install.sh --help` lists the options (`--hub`, `--token-file`, `--user`, `--pid`, `--allow-remote-capture`, …).
+
+### Manual install
+
+If you'd rather not run the installer, these are the steps it performs:
+
 ```bash
 sudo install -m 755 sidecar/msnm-sidecar.sh /usr/local/bin/msnm-sidecar
 sudo install -m 600 -o <monerod-user> sidecar/msnm-sidecar.conf.example /etc/msnm-sidecar.conf
@@ -38,7 +64,7 @@ sudoedit /etc/msnm-sidecar.conf          # set HUB_URL and TOKEN
 sudo -u <monerod-user> MSNM_CONFIG=/etc/msnm-sidecar.conf msnm-sidecar --check
 ```
 
-`--check` finds `monerod`, tests its RPC and the hub connection, and reports what's missing. `--once` prints one batch to the screen without sending it, so you can see exactly what would be sent.
+`--check` finds `monerod`, tests its RPC and the hub connection, and reports what's missing. `--once` prints one batch to the screen without sending it, so you can see exactly what would be sent (`sudo -u <monerod-user> msnm-sidecar --once | less`).
 
 Then run it as a service:
 
@@ -68,6 +94,8 @@ Measured on a Ryzen 9900X VM, with intervals 2.5–7.5× more frequent than the 
 If the hub is unreachable, batches are queued in the spool directory (at most `SPOOL_MAX_MB`, oldest dropped first) and sent later.
 
 ## Stopping and removing
+
+`sudo ./sidecar/install.sh --uninstall` does this:
 
 ```bash
 sudo systemctl disable --now msnm-sidecar

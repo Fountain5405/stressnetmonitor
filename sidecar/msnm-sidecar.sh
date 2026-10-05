@@ -19,7 +19,7 @@
 set -u
 export LC_ALL=C   # EPOCHREALTIME and numbers must use '.' as decimal point
 
-SIDECAR_VERSION="0.1.1"
+SIDECAR_VERSION="0.1.2"
 
 # ----------------------------------------------------------------- config ---
 
@@ -111,6 +111,15 @@ done
 HAVE_GZIP=0; command -v gzip >/dev/null && HAVE_GZIP=1
 
 # ------------------------------------------------------------------ spool ---
+
+# --check and --once send nothing, so they get a private throwaway spool:
+# system users often have no writable home, and the service's spool belongs
+# to the running service.
+CONF_SPOOL_DIR=$SPOOL_DIR
+if [[ $MODE != run ]]; then
+  SPOOL_DIR=$(mktemp -d "${TMPDIR:-/tmp}/msnm-sidecar-$MODE.XXXXXX") || die "mktemp failed"
+  trap 'rm -rf "$SPOOL_DIR"' EXIT
+fi
 
 OUTBOX="$SPOOL_DIR/outbox"   # batches and bundles waiting to be pushed
 INBOX="$SPOOL_DIR/inbox"     # complete record files from background jobs
@@ -695,7 +704,8 @@ check() {
   if find_monerod; then
     echo "monerod:   pid $MPID${MONEROD_UNIT:+ (unit $MONEROD_UNIT)}"
     echo "data dir:  $M_DATA_DIR"
-    echo "log file:  $M_LOG $([[ -r $M_LOG ]] && echo '(readable)' || { ok=0; echo '(NOT READABLE)'; })"
+    if [[ -r $M_LOG ]]; then echo "log file:  $M_LOG (readable)"
+    else ok=0; echo "log file:  $M_LOG (NOT READABLE)"; fi
     echo "rpc:       $M_RPC${M_RPC_LOGIN:+ (with login)}"
     ((M_RESTRICTED)) && { echo "  warning: monerod runs with --restricted-rpc; some data will be missing"; }
     ((M_SHOW_TIME_STATS)) || echo "  warning: monerod lacks --show-time-stats 1; per-block timings will be missing"
@@ -719,7 +729,7 @@ check() {
   else
     ok=0; echo "hub:       HUB_URL not set"
   fi
-  echo "spool:     $SPOOL_DIR"
+  echo "spool:     $CONF_SPOOL_DIR"
   ((ok)) && echo "all checks passed" || echo "some checks FAILED"
   ((ok))
 }
