@@ -1,0 +1,32 @@
+# msnm-sidecar configuration. Copy to /etc/msnm-sidecar.conf and chmod 600
+# (it contains your token). This file is sourced by bash: KEY="value", no
+# spaces around '='.
+
+# Given to you by the monitor operator.
+HUB_URL="https://msnm.example.org"
+TOKEN=""
+
+# Everything below is optional; the defaults suit a standard stressnet node.
+
+# Which monerod to watch. With one testnet monerod on the machine, leave as is.
+#MONEROD_MATCH="--testnet"
+#MONEROD_PID=""
+
+# Normally derived from monerod's command line (and bitmonero.conf).
+#RPC_URL="http://127.0.0.1:28081"
+#RPC_LOGIN="user:pass"          # if monerod uses --rpc-login
+#MONEROD_LOG="/home/monero/.bitmonero/testnet/bitmonero.log"
+#DATA_DIR="/home/monero/.bitmonero/testnet"
+
+# Where unsent data is queued if the hub is unreachable (max SPOOL_MAX_MB).
+#SPOOL_DIR="/var/lib/msnm-sidecar"
+#SPOOL_MAX_MB=200
+
+#HOST_INTERVAL=5     # seconds between /proc samples
+#RPC_INTERVAL=30     # seconds between RPC polls
+#PUSH_INTERVAL=30    # seconds between uploads
+
+# Bug-report capture.
+#CAPTURE_CRASH=1          # on monerod exit: upload log tail, OOM messages, backtrace
+#CAPTURE_GDB=1            # include a core dump backtrace (needs systemd-coredump + gdb)
+#ALLOW_REMOTE_CAPTURE=0   # 1: the hub may request a log-tail bundle when this node stalls

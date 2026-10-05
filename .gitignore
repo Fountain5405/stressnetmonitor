@@ -7,3 +7,7 @@ target/
 *.db
 .env
 config.local.yaml
+*.egg-info/
+.pytest_cache/
+hub.yaml
+msnm-data/

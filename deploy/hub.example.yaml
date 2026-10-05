@@ -1,0 +1,44 @@
+# msnm hub configuration. Copy to /etc/msnm/hub.yaml (or pass -c).
+
+data_dir: /var/lib/msnm          # raw archive, Parquet, bundles, registry
+
+# Sidecar ingest API. Expose it publicly only through HAProxy (TLS).
+ingest_host: 127.0.0.1
+ingest_port: 8790
+# Prometheus scrape target (/metrics) and /healthz. Keep it private.
+metrics_host: 127.0.0.1
+metrics_port: 8791
+# Requests from these addresses may set X-Forwarded-For (the proxy end of the tunnel).
+trusted_proxies: [127.0.0.1, "::1"]
+
+# Beta stressnet v3: FCMP++ hard fork at 3102800 (v17), v18 at 3103520.
+# Nodes past the fork height whose top block has major_version < 17 are on
+# the old testnet chain (WRONG_CHAIN).
+fork_height: 3102800
+min_major_version: 17
+
+flush_interval_s: 300            # how often buffered rows are written to Parquet
+
+references:                      # polled directly; must be reachable from the hub
+  - id: ref-a
+    rpc: http://192.0.2.10:28081
+    zmq: tcp://192.0.2.10:28083  # optional: monerod --zmq-pub tcp://0.0.0.0:28083
+  - id: ref-b
+    rpc: http://192.0.2.11:28081
+    # rpc_login: "user:pass"
+
+# Operator nodes whose ZMQ publisher the hub subscribes to (every tx and
+# block arrival, timed on the hub's clock). The id must match the node's
+# registry id so the data joins up.
+zmq_nodes: []
+#  - id: op-5600g
+#    zmq: tcp://192.0.2.20:28083
+
+thresholds:
+  silent_after_s: 120            # no pushes for this long: DOWN
+  unresponsive_polls: 2          # consecutive failed get_info: UNRESPONSIVE
+  behind_blocks: 2               # lag >= this: BEHIND
+  falling_slope_per_h: 2.0       # lag growing faster than this: FALLING_BEHIND
+  stall_after_s: 600             # height unchanged while the chain moved: STALLED
+  syncing_lag: 30                # lag above this while busy_syncing: SYNCING
+  fork_confirm_s: 90             # tip must disagree this long: FORKED

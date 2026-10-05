@@ -1,0 +1,58 @@
+#MSNM1	seq=1	created=1	sidecar=0.1.0	boot_id=x	monerod_pid=1
+P	1791166005.582894	sidecar_version	0.1.0
+P	1791166005.582894	bash_version	5.2.21(1)-release
+P	1791166005.582894	cpu_logical	12
+P	1791166005.582894	cpu_physical_cores	12
+P	1791166005.582894	mem_total_kb	12245444
+P	1791166005.582894	clk_tck	100
+P	1791166005.582894	page_size	4096
+P	1791166005.582894	monerod_show_time_stats	1
+S	1791166005.599559	cpu=164314,1692,25192,777264804,25251,0,506,4781 ctxt=44205946 procs_running=1 procs_blocked=0 mem_total_kb=12245444 mem_free_kb=8527440 mem_avail_kb=11061896 buffers_kb=145004 cached_kb=2579708 swap_total_kb=0 swap_free_kb=0 dirty_kb=112 writeback_kb=0 load=0.02,0.03,0.01 pswpin=0 pswpout=0 pgmajfault=1922 disk.vda=25260,862383,3473,216779,65107020,438787,0,228787,643754 net_rx=747355217 net_tx=28522000 psi_cpu_some=93105788 psi_cpu_full=0 psi_io_some=189380440 psi_io_full=187984435 psi_memory_some=22 psi_memory_full=16
+M	1791166005.602206	pid=123570 state=S minflt=69829 majflt=2 utime=70 stime=18 num_threads=30 starttime=64736078 vms_kb=2262444 hwm_kb=291972 rss_kb=291972 rss_anon_kb=272436 rss_file_kb=19536 swap_kb=0 vcsw=14 nvcsw=2 io_read_bytes=36864 io_write_bytes=450560
+R	1791166005.602657	get_info	200	0.000778	{   "id": "0",   "jsonrpc": "2.0",   "result": {     "adjusted_time": 1791166005,     "alt_blocks_count": 0,     "block_size_limit": 20000000,     "block_size_median": 10000000,     "block_weight_limit": 20000000,     "block_weight_median": 10000000,     "busy_syncing": false,     "credits": 0,     "cumulative_difficulty": 6,     "cumulative_difficulty_top64": 0,     "database_size": 208896,     "difficulty": 1,     "difficulty_top64": 0,     "free_space": 827001929728,     "grey_peerlist_size": 0,     "height": 6,     "incoming_connections_count": 0,     "mainnet": false,     "nettype": "fakechain",     "offline": true,     "outgoing_connections_count": 0,     "restricted": false,     "rpc_connections_count": 1,     "stagenet": false,     "start_time": 1791165384,     "status": "OK",     "synchronized": true,     "target": 120,     "target_height": 0,     "testnet": false,     "top_block_hash": "456d999df8a252596c179ef5e3afbf4558bc9bd545a65ae51682a3ce4de26e20",     "top_hash": "",     "tx_count": 0,     "tx_pool_size": 0,     "update_available": false,     "version": "0.19.0.0-beta.3.0-release",     "white_peerlist_size": 0,     "wide_cumulative_difficulty": "0x6",     "wide_difficulty": "0x1"   } } 
+R	1791166005.602657	get_last_block_header	200	0.000232	{   "id": "0",   "jsonrpc": "2.0",   "result": {     "block_header": {       "block_size": 103,       "block_weight": 103,       "cumulative_difficulty": 6,       "cumulative_difficulty_top64": 0,       "depth": 0,       "difficulty": 1,       "difficulty_top64": 0,       "hash": "456d999df8a252596c179ef5e3afbf4558bc9bd545a65ae51682a3ce4de26e20",       "height": 5,       "long_term_weight": 8333333,       "major_version": 18,       "miner_tx_hash": "d4cb43bcca1f74fab72d821b91de9a2c14d3a0783d83a129ea9b1c068388de04",       "minor_version": 18,       "nonce": 0,       "num_txes": 0,       "orphan_status": false,       "pow_hash": "",       "prev_hash": "691b22a9fa9699bd053d7e220be853241d3eb9caabd5d77bb599238b0ff0f6d0",       "reward": 35184070099967,       "timestamp": 1791165898,       "wide_cumulative_difficulty": "0x6",       "wide_difficulty": "0x1"     },     "credits": 0,     "status": "OK",     "top_hash": ""   } } 
+R	1791166005.602657	get_fee_estimate	200	0.000209	{   "id": "0",   "jsonrpc": "2.0",   "result": {     "credits": 0,     "fee": 4400,     "fees": [4400,18000,71000,290000,7100000],     "quantization_mask": 10000,     "status": "OK",     "top_hash": ""   } } 
+R	1791166005.602657	get_connections	200	0.000201	{   "id": "0",   "jsonrpc": "2.0",   "result": {     "status": "OK"   } } 
+R	1791166005.602657	get_bans	200	0.000075	{   "id": "0",   "jsonrpc": "2.0",   "result": {     "status": "OK"   } } 
+R	1791166005.602657	get_transaction_pool_stats	200	0.000171	{   "credits": 0,   "pool_stats": {     "bytes_max": 0,     "bytes_med": 0,     "bytes_min": 0,     "bytes_total": 0,     "fee_total": 0,     "histo_98pc": 0,     "num_10m": 0,     "num_double_spends": 0,     "num_failing": 0,     "num_not_relayed": 0,     "oldest": 0,     "txs_total": 0   },   "status": "OK",   "top_hash": "" } 
+L	1791165900.1	2026-10-05 01:56:24.459	    7c52024c4c80	WARNING	global	src/blockchain_db/lmdb/db_lmdb.cpp:2665	The blockchain is on a rotating drive: this will be very slow, use an SSD if possible
+L	1791165900.1	2026-10-05 01:56:24.480	    7c52024c4c80	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	+++++ BLOCK SUCCESSFULLY ADDED
+L	1791165900.1	2026-10-05 01:56:24.480	    7c52024c4c80	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	id:	<418015bb9ae982a1975da7d79277c2705727a56894ba0fb246adaabb1f4632e3>
+L	1791165900.1	2026-10-05 01:56:24.480	    7c52024c4c80	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	PoW:	<8a7b1a780e99eec31a9425b7d89c283421b2042a337d5700dfd4a7d6eb7bd774>
+L	1791165900.1	2026-10-05 01:56:24.480	    7c52024c4c80	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	HEIGHT 0, difficulty:	1
+L	1791165900.1	2026-10-05 01:56:24.480	    7c52024c4c80	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	block reward: 17.592186044415(17.592186044415 + 0.000000000000), coinbase_weight: 80, cumulative weight: 80, 10(0/10)ms
+L	1791165900.1	2026-10-05 01:56:32.106	[RPC1]	WARNING	blockchain	src/cryptonote_core/blockchain.cpp:4216	Grace blocks not equal to expected 1000 in dynamic base fee estimate, possible wallet fingerprint.
+L	1791165900.1	2026-10-05 01:56:43.008	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	+++++ BLOCK SUCCESSFULLY ADDED
+L	1791165900.1	2026-10-05 01:56:43.008	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	id:	<5717eeec6ce04ec113083f6112d3dd179820d104f0ed0dd07ea2f78cc7633240>
+L	1791165900.1	2026-10-05 01:56:43.008	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	PoW:	<d277ea92938c3a813a7827c571507a4e263421621029cdd02c1456467c7bea0c>
+L	1791165900.1	2026-10-05 01:56:43.008	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	HEIGHT 1, difficulty:	1
+L	1791165900.1	2026-10-05 01:56:43.008	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	block reward: 35.184338534400(35.184338534400 + 0.000000000000), coinbase_weight: 103, cumulative weight: 103, 8(0/8)ms
+L	1791165900.1	2026-10-05 01:56:43.008	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4989	Height: 2 coinbase weight: 103 cumm: 103 p/t: 8 (0/8/0/0/0/0/0/0/0/0/0/0/0)ms
+L	1791165900.1	2026-10-05 01:56:43.033	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	+++++ BLOCK SUCCESSFULLY ADDED
+L	1791165900.1	2026-10-05 01:56:43.033	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	id:	<022c43d36cda8611b045a64058e90bbeef90cef0fc592374c110c7a66c7733cc>
+L	1791165900.1	2026-10-05 01:56:43.033	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	PoW:	<0513cd11a5c9f8a592763a79aeba18b8f3e838ffac23d1a93b74db5fa24d9304>
+L	1791165900.1	2026-10-05 01:56:43.033	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	HEIGHT 2, difficulty:	1
+L	1791165900.1	2026-10-05 01:56:43.033	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	block reward: 35.184271425600(35.184271425600 + 0.000000000000), coinbase_weight: 103, cumulative weight: 103, 9(0/8)ms
+L	1791165900.1	2026-10-05 01:56:43.033	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4989	Height: 3 coinbase weight: 103 cumm: 103 p/t: 9 (0/8/0/0/0/0/0/0/0/0/1/0/0)ms
+L	1791165900.1	2026-10-05 01:56:43.060	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	+++++ BLOCK SUCCESSFULLY ADDED
+L	1791165900.1	2026-10-05 01:56:43.060	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	id:	<3e64b62cf9963f76d0fd668570e5da17fa539e196810e27b986c5d30381bfae1>
+L	1791165900.1	2026-10-05 01:56:43.060	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	PoW:	<7e8a37deb2a3b868fb587a8bfb6ed871928c6592f02f6359502fa800144d7f10>
+L	1791165900.1	2026-10-05 01:56:43.060	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	HEIGHT 3, difficulty:	1
+L	1791165900.1	2026-10-05 01:56:43.060	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	block reward: 35.184204316927(35.184204316927 + 0.000000000000), coinbase_weight: 103, cumulative weight: 103, 11(0/11)ms
+L	1791165900.1	2026-10-05 01:56:43.060	[RPC1]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4989	Height: 4 coinbase weight: 103 cumm: 103 p/t: 11 (0/11/0/0/0/0/0/0/0/0/0/0/0)ms
+L	1791165900.1	2026-10-05 01:56:43.072	[RPC1]	WARNING	blockchain	src/cryptonote_core/blockchain.cpp:4216	Grace blocks not equal to expected 1000 in dynamic base fee estimate, possible wallet fingerprint.
+L	1791165900.1	2026-10-05 02:03:09.822	[RPC0]	WARNING	blockchain	src/cryptonote_core/blockchain.cpp:4216	Grace blocks not equal to expected 1000 in dynamic base fee estimate, possible wallet fingerprint.
+L	1791165900.1	2026-10-05 02:03:15.714	[RPC0]	WARNING	blockchain	src/cryptonote_core/blockchain.cpp:4216	Grace blocks not equal to expected 1000 in dynamic base fee estimate, possible wallet fingerprint.
+L	1791165900.1	2026-10-05 02:04:58.134	[RPC0]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	+++++ BLOCK SUCCESSFULLY ADDED
+L	1791165900.1	2026-10-05 02:04:58.134	[RPC0]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	id:	<691b22a9fa9699bd053d7e220be853241d3eb9caabd5d77bb599238b0ff0f6d0>
+L	1791165900.1	2026-10-05 02:04:58.134	[RPC0]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	PoW:	<13331c1ac578a6a3e6acfe5f1d6137ca712990297ab04cb36b3a2bff9ee61fe7>
+L	1791165900.1	2026-10-05 02:04:58.134	[RPC0]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	HEIGHT 4, difficulty:	1
+L	1791165900.1	2026-10-05 02:04:58.134	[RPC0]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	block reward: 35.184137208383(35.184137208383 + 0.000000000000), coinbase_weight: 103, cumulative weight: 103, 15(0/15)ms
+L	1791165900.1	2026-10-05 02:04:58.134	[RPC0]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4989	Height: 5 coinbase weight: 103 cumm: 103 p/t: 15 (0/15/0/0/0/0/0/0/0/0/0/0/0)ms
+L	1791165900.1	2026-10-05 02:04:58.159	[RPC0]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	+++++ BLOCK SUCCESSFULLY ADDED
+L	1791165900.1	2026-10-05 02:04:58.159	[RPC0]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	id:	<456d999df8a252596c179ef5e3afbf4558bc9bd545a65ae51682a3ce4de26e20>
+L	1791165900.1	2026-10-05 02:04:58.159	[RPC0]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	PoW:	<694029afa67e43c786780dbfeb520787cf75c81a68ec52edbb7df54e66b97fae>
+L	1791165900.1	2026-10-05 02:04:58.159	[RPC0]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	HEIGHT 5, difficulty:	1
+L	1791165900.1	2026-10-05 02:04:58.159	[RPC0]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4986	block reward: 35.184070099967(35.184070099967 + 0.000000000000), coinbase_weight: 103, cumulative weight: 103, 9(0/9)ms
+L	1791165900.1	2026-10-05 02:04:58.159	[RPC0]	INFO	blockchain	src/cryptonote_core/blockchain.cpp:4989	Height: 6 coinbase weight: 103 cumm: 103 p/t: 9 (0/9/0/0/0/0/0/0/0/0/0/0/0)ms
+L	1791165900.1	2026-10-05 02:06:45.606	[RPC1]	WARNING	blockchain	src/cryptonote_core/blockchain.cpp:4216	Grace blocks not equal to expected 1000 in dynamic base fee estimate, possible wallet fingerprint.

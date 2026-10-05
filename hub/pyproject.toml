@@ -1,0 +1,28 @@
+[project]
+name = "msnm"
+version = "0.1.0"
+description = "StressNet monitor hub: sidecar ingest, reference chain, node states, Parquet"
+requires-python = ">=3.10"
+dependencies = [
+  "aiohttp>=3.12",
+  "pyarrow>=15",
+  "pyzmq>=25",
+  "prometheus_client>=0.20",
+  "PyYAML>=6",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+msnm = "msnm.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["msnm"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

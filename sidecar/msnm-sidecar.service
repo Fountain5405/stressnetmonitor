@@ -1,0 +1,29 @@
+# systemd unit for msnm-sidecar.
+# Run it as the same user as monerod so it can read monerod's log and
+# /proc/<pid>/io. Install:
+#   sudo install -m 755 msnm-sidecar.sh /usr/local/bin/msnm-sidecar
+#   sudo install -m 600 -o <monerod-user> msnm-sidecar.conf.example /etc/msnm-sidecar.conf   # then edit
+#   sudo cp msnm-sidecar.service /etc/systemd/system/   # then set User= below
+#   sudo systemctl daemon-reload && sudo systemctl enable --now msnm-sidecar
+
+[Unit]
+Description=StressNet monitor sidecar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=monero
+Environment=MSNM_CONFIG=/etc/msnm-sidecar.conf
+StateDirectory=msnm-sidecar
+Environment=SPOOL_DIR=/var/lib/msnm-sidecar
+ExecStart=/usr/local/bin/msnm-sidecar
+Restart=always
+RestartSec=10
+# Keep the observer light: lowest CPU and IO priority.
+Nice=19
+IOSchedulingClass=idle
+# Optional: lets the sidecar read kernel OOM messages for crash bundles.
+#SupplementaryGroups=systemd-journal adm
+
+[Install]
+WantedBy=multi-user.target

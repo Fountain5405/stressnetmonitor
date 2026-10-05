@@ -1,0 +1,36 @@
+# HAProxy on the public VPS: terminates TLS and forwards only the sidecar API
+# to the hub. The hub is reached over a private link (WireGuard, or an SSH
+# reverse tunnel such as `ssh -N -R 127.0.0.1:8790:127.0.0.1:8790 vps` run
+# from the hub machine).
+#
+# The certificate file is the full chain + private key in one PEM
+# (e.g. from certbot: cat fullchain.pem privkey.pem > /etc/haproxy/msnm.pem).
+
+global
+    log /dev/log local0
+    maxconn 2000
+
+defaults
+    log global
+    mode http
+    option httplog
+    timeout connect 5s
+    timeout client 70s
+    timeout server 70s
+
+frontend msnm_public
+    bind :443 ssl crt /etc/haproxy/msnm.pem alpn h2,http/1.1
+    # Only the sidecar API is public.
+    acl api path_beg /v1/
+    http-request deny unless api
+    # Per-source-IP rate limit, in addition to the hub's per-token limit.
+    stick-table type ip size 100k expire 10m store http_req_rate(1m)
+    http-request track-sc0 src
+    http-request deny deny_status 429 if { sc_http_req_rate(0) gt 120 }
+    option forwardfor
+    default_backend msnm_hub
+
+backend msnm_hub
+    # Address of the hub's ingest port as seen from the VPS
+    # (WireGuard peer IP, or 127.0.0.1:8790 when using an SSH reverse tunnel).
+    server hub 10.8.0.2:8790 check

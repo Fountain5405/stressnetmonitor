@@ -1,0 +1,11 @@
+# Prometheus scrape config for the hub. The hub already computes rates and
+# states, so a 15 s scrape is enough. Raise retention so the whole run fits:
+#   prometheus --config.file=prometheus.yml --storage.tsdb.retention.time=90d
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: msnm
+    static_configs:
+      - targets: ["127.0.0.1:8791"]

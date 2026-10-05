@@ -1,0 +1,20 @@
+# systemd unit for the msnm hub. Assumes the repo is checked out at
+# /opt/stressnetmonitor with a virtualenv in /opt/stressnetmonitor/.venv:
+#   python3 -m venv /opt/stressnetmonitor/.venv
+#   /opt/stressnetmonitor/.venv/bin/pip install /opt/stressnetmonitor/hub
+
+[Unit]
+Description=StressNet monitor hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=msnm
+ExecStart=/opt/stressnetmonitor/.venv/bin/msnm -c /etc/msnm/hub.yaml serve
+Restart=always
+RestartSec=5
+# Give the hub time to flush buffered rows to Parquet on stop.
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
