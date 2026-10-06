@@ -31,6 +31,71 @@ def _registry(cfg) -> Registry:
     return Registry(os.path.join(cfg.data_dir, "registry.sqlite"))
 
 
+REPO = "https://github.com/Fountain5405/stressnetmonitor"
+
+# Plain text, no markdown: it gets pasted into chat clients as is.
+WELCOME = """\
+Thanks for running a stressnet sidecar!
+
+Node name: {node_id}
+Hub URL: {hub_url}
+Token: {token}
+
+Please keep the token private. It identifies your node to the hub.
+
+Step 1. Add these options to monerod and restart it:
+
+--show-time-stats 1 --log-level 0,blockchain:INFO,txpool:INFO
+
+On v0.19.0.0-beta.3.0, also add these seed nodes (its built-in ones are dead):
+
+--seed-node 185.141.216.177:28180 --seed-node 208.123.187.228:28080 --seed-node 185.141.216.147:28080 --seed-node 209.141.41.69:28080
+
+Step 2. On the same machine, run:
+
+git clone {repo}.git
+cd stressnetmonitor
+sudo ./sidecar/install.sh --hub {hub_url}
+
+The installer asks for the token, checks everything, and starts the sidecar
+as a systemd service. Without sudo or systemd, run this instead, as the user
+that runs monerod:
+
+./sidecar/install.sh --hub {hub_url} --no-systemd
+
+What it sends and how to remove it: {repo}/blob/main/docs/sidecar.md
+
+Once it's running, please tell me your hardware: CPU, RAM, and SSD or HDD.
+"""
+
+NEW_TOKEN = """\
+Here is a new token for your stressnet sidecar ({node_id}). The old one no longer works.
+
+{token}
+
+To switch, run the installer again from your stressnetmonitor checkout:
+
+git pull
+sudo ./sidecar/install.sh --hub {hub_url}
+
+Or put TOKEN="{token}" in /etc/msnm-sidecar.conf
+(~/.config/msnm-sidecar.conf with --no-systemd) and restart the sidecar.
+"""
+
+
+def _write_message(cfg, node_id: str, text: str) -> str:
+    """Write a copy-paste message for the node's operator. It holds the token,
+    so the file is readable by the hub's user only."""
+    d = os.path.join(cfg.data_dir, "welcome")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    path = os.path.join(d, f"{node_id}.txt")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    return path
+
+
 def cmd_serve(cfg, args) -> int:
     from .server import Hub
     asyncio.run(Hub(cfg).run())
@@ -39,17 +104,20 @@ def cmd_serve(cfg, args) -> int:
 
 def cmd_node(cfg, args) -> int:
     reg = _registry(cfg)
+    hub_url = getattr(args, "hub_url", None) or cfg.public_url or "https://<your-hub>"
     if args.node_cmd == "add":
         token = reg.add(args.node_id, args.tier, args.position, args.note or "")
+        path = _write_message(cfg, args.node_id, WELCOME.format(
+            node_id=args.node_id, hub_url=hub_url, token=token, repo=REPO))
         print(f"node {args.node_id} added ({args.tier}, {args.position}).")
-        print("Token (shown once; give it only to this node's operator):\n")
-        print(f"  {token}\n")
-        print("Sidecar config (/etc/msnm-sidecar.conf):\n")
-        print(f'  HUB_URL="{args.hub_url or "https://<your-hub>"}"')
-        print(f'  TOKEN="{token}"')
+        print(f"Token (shown once; give it only to this node's operator): {token}")
+        print(f"Message for the operator, ready to paste: {path}")
     elif args.node_cmd == "rotate-token":
         token = reg.rotate(args.node_id)
-        print(f"new token for {args.node_id} (the old one no longer works):\n\n  {token}")
+        path = _write_message(cfg, args.node_id, NEW_TOKEN.format(
+            node_id=args.node_id, hub_url=hub_url, token=token))
+        print(f"new token for {args.node_id} (the old one no longer works): {token}")
+        print(f"Message for the operator, ready to paste: {path}")
     elif args.node_cmd == "revoke":
         reg.revoke(args.node_id)
         print(f"revoked {args.node_id}; its pushes are refused within 10 s")
@@ -127,10 +195,12 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--tier", required=True, choices=TIERS)
     a.add_argument("--position", required=True, choices=POSITIONS)
     a.add_argument("--note")
-    a.add_argument("--hub-url")
+    a.add_argument("--hub-url", help="default: public_url from the config")
     nsub.add_parser("list")
-    for name in ("revoke", "rotate-token"):
-        nsub.add_parser(name).add_argument("node_id")
+    nsub.add_parser("revoke").add_argument("node_id")
+    r = nsub.add_parser("rotate-token")
+    r.add_argument("node_id")
+    r.add_argument("--hub-url", help="default: public_url from the config")
     s = nsub.add_parser("set")
     s.add_argument("node_id")
     s.add_argument("--tier", choices=TIERS)

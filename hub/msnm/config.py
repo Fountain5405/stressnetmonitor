@@ -19,6 +19,7 @@ class ZmqNode:
 @dataclass
 class Config:
     data_dir: str = "/var/lib/msnm"
+    public_url: str = ""          # what sidecars push to; used in `msnm node add` messages
     ingest_host: str = "127.0.0.1"
     ingest_port: int = 8790
     metrics_host: str = "127.0.0.1"

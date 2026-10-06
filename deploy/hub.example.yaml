@@ -1,6 +1,9 @@
 # msnm hub configuration. Copy to /etc/msnm/hub.yaml (or pass -c).
 
 data_dir: /var/lib/msnm          # raw archive, Parquet, bundles, registry
+# Public ingest URL that sidecars push to. `msnm node add` puts it in the
+# message it writes for the node's operator (data_dir/welcome/NODE_ID.txt).
+public_url: https://hub.example.org
 
 # Sidecar ingest API. Expose it publicly only through HAProxy (TLS).
 ingest_host: 127.0.0.1
