@@ -1,0 +1,33 @@
+# Reverse SSH tunnel from the hub machine to the public server, so HAProxy
+# there reaches the hub at 127.0.0.1:8790. Nothing on the hub's network needs
+# to accept inbound connections.
+#
+# Install as a systemd *user* unit on the hub machine (with lingering enabled:
+# `loginctl enable-linger <user>`):
+#   ~/.config/systemd/user/msnm-tunnel.service
+#   systemctl --user enable --now msnm-tunnel
+#
+# On the public server, create a `tunnel` user with shell /usr/sbin/nologin
+# and restrict its key to this one forward, in ~tunnel/.ssh/authorized_keys:
+#   restrict,port-forwarding,permitlisten="127.0.0.1:8790",command="/usr/sbin/nologin" ssh-ed25519 AAAA... msnm-hub-tunnel
+# Pin the server's host key in ~/.ssh/known_hosts_msnm (check its fingerprint
+# against the server's console output, not just the first connection).
+
+[Unit]
+Description=Reverse SSH tunnel: public ingest server 127.0.0.1:8790 -> local msnm hub
+After=network-online.target msnm-hub.service
+
+[Service]
+ExecStart=/usr/bin/ssh -N -T \
+  -i %h/.ssh/msnm_tunnel \
+  -o BatchMode=yes \
+  -o UserKnownHostsFile=%h/.ssh/known_hosts_msnm -o StrictHostKeyChecking=yes \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+  -R 127.0.0.1:8790:127.0.0.1:8790 \
+  tunnel@ingest.example.org
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

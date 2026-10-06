@@ -1,36 +1,59 @@
-# HAProxy on the public VPS: terminates TLS and forwards only the sidecar API
-# to the hub. The hub is reached over a private link (WireGuard, or an SSH
-# reverse tunnel such as `ssh -N -R 127.0.0.1:8790:127.0.0.1:8790 vps` run
-# from the hub machine).
+# HAProxy on the public server: terminates TLS and forwards only the sidecar
+# API to the hub. The hub is reached over a private link: an SSH reverse
+# tunnel run from the hub machine (see msnm-tunnel.service.example), which
+# makes the hub appear at 127.0.0.1:8790 here, or WireGuard.
 #
-# The certificate file is the full chain + private key in one PEM
-# (e.g. from certbot: cat fullchain.pem privkey.pem > /etc/haproxy/msnm.pem).
+# The certificate file is the private key + full chain in one PEM. With lego
+# (see lego-renew.service.example) that is certificates/<name>.pem, copied
+# into /etc/haproxy/certs/ by the deploy hook.
 
 global
     log /dev/log local0
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin
+    user haproxy
+    group haproxy
+    daemon
     maxconn 2000
+    ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
 
 defaults
     log global
     mode http
     option httplog
+    option dontlognull
     timeout connect 5s
     timeout client 70s
     timeout server 70s
+    timeout http-request 15s
+
+# Port 80 only answers ACME HTTP-01 challenges (lego listens on 127.0.0.1:8402
+# while renewing).
+frontend http_in
+    bind :80
+    acl acme path_beg /.well-known/acme-challenge/
+    http-request deny deny_status 404 unless acme
+    default_backend acme
+
+backend acme
+    server lego 127.0.0.1:8402
 
 frontend msnm_public
-    bind :443 ssl crt /etc/haproxy/msnm.pem alpn h2,http/1.1
+    bind :443 ssl crt /etc/haproxy/certs/ingest.pem alpn h2,http/1.1
     # Only the sidecar API is public.
     acl api path_beg /v1/
-    http-request deny unless api
+    http-request deny deny_status 404 unless api
     # Per-source-IP rate limit, in addition to the hub's per-token limit.
     stick-table type ip size 100k expire 10m store http_req_rate(1m)
     http-request track-sc0 src
     http-request deny deny_status 429 if { sc_http_req_rate(0) gt 120 }
+    # The hub trusts X-Forwarded-For from this proxy. `option forwardfor`
+    # appends a header but keeps any the client sent, and the hub reads the
+    # first one, so drop the client's or anyone could fake their address.
+    http-request del-header X-Forwarded-For
     option forwardfor
     default_backend msnm_hub
 
 backend msnm_hub
-    # Address of the hub's ingest port as seen from the VPS
-    # (WireGuard peer IP, or 127.0.0.1:8790 when using an SSH reverse tunnel).
-    server hub 10.8.0.2:8790 check
+    # 127.0.0.1:8790 with the SSH reverse tunnel; the WireGuard peer IP otherwise.
+    server hub 127.0.0.1:8790 check inter 10s

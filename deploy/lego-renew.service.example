@@ -1,0 +1,33 @@
+# Let's Encrypt certificate for the public ingest server, via lego
+# (https://go-acme.github.io/lego/). Works for a domain name or a bare IP
+# address; IP certificates require the short-lived profile (~6 days), so
+# renewal must be automatic. Run it twice a day from a timer
+# (/etc/systemd/system/lego-renew.timer):
+#
+#   [Timer]
+#   OnCalendar=*-*-* 00,12:00:00
+#   RandomizedDelaySec=1h
+#   Persistent=true
+#   [Install]
+#   WantedBy=timers.target
+#
+# First issuance, before HAProxy owns port 80: the same command with
+# `--http.address :80`. Afterwards HAProxy forwards /.well-known/acme-challenge/
+# to 127.0.0.1:8402 (see haproxy.cfg.example).
+#
+# The deploy hook (/usr/local/sbin/msnm-cert-deploy) installs the PEM where
+# HAProxy reads it and reloads HAProxy:
+#   install -m 640 -o root -g haproxy /etc/lego/certificates/<name>.pem /etc/haproxy/certs/ingest.pem
+#   systemctl reload haproxy
+
+[Unit]
+Description=Renew the ingest TLS certificate (lego)
+After=network-online.target haproxy.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lego run --accept-tos --domains ingest.example.org \
+  --http --http.address 127.0.0.1:8402 --path /etc/lego --pem \
+  --deploy-hook /usr/local/sbin/msnm-cert-deploy
+# For an IP address instead of a name, add: --profile shortlived
