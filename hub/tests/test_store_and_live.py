@@ -99,3 +99,21 @@ def test_node_states(tmp_path):
     assert mon.nodes["a"].state == "DOWN"
     # every transition was recorded
     assert len(mon.sink._rows["node_state"]) == 5
+
+
+def test_lag_uses_canonical_height_at_sample_time(tmp_path):
+    # Blocks 99 and 100 appeared after the node's (30 s old) sample at 98: the
+    # node was at the tip when it sampled, so it is not BEHIND.
+    from msnm.registry import Node
+    mon, chain = _monitor(tmp_path)
+    now = time.time()
+    chain.first_seen[(99, f"{99:064x}")] = now - 5
+    chain.first_seen[(100, f"{100:064x}")] = now - 3
+    node = Node("a", "operator", "lan", "", 0, None)
+    _feed(mon, node, _info_batch(98, f"{98:064x}", t=now - 30))
+    mon.evaluate()
+    assert mon.nodes["a"].state == "OK"
+    # The same height sampled now really is two blocks behind.
+    _feed(mon, node, _info_batch(98, f"{98:064x}", t=now))
+    mon.evaluate()
+    assert mon.nodes["a"].state == "BEHIND"

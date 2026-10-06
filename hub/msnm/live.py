@@ -281,7 +281,12 @@ class Monitor:
             nl.height, nl.height_changed_at, nl.canon_height_at_change = h, nl.info_time, canon_h
         if canon_h is None:
             return "UNKNOWN", "reference chain unavailable", None
-        lag = canon_h - h
+        # Lag against the canonical height when the node took this sample, not
+        # now: its get_info can be a minute old (RPC poll + push interval), and
+        # blocks sometimes arrive seconds apart, so comparing with the current
+        # tip flags healthy nodes as BEHIND.
+        canon_then = self.chain.height_at(nl.info_time - (nl.clock_offset or 0.0))
+        lag = (canon_h if canon_then is None else min(canon_then, canon_h)) - h
         if not nl.lag_hist or nl.lag_hist[-1][0] != nl.info_time:
             nl.lag_hist.append((nl.info_time, lag))
         mv = (nl.header or {}).get("major_version")

@@ -81,6 +81,22 @@ class Chain:
         h = block_hash or self.hash_at(height)
         return self.first_seen.get((height, h)) if h else None
 
+    def height_at(self, t: float, max_back: int = 30) -> int | None:
+        """Canonical tip height as it was at hub time t: the highest canonical
+        block first seen at or before t. Blocks with no first-seen time
+        (backfilled at startup) count as already present."""
+        c = self.canonical()
+        if c is None or c.top_height is None:
+            return None
+        h = c.top_height
+        for _ in range(max_back):
+            bh = c.hashes.get(h)
+            seen = self.first_seen.get((h, bh)) if bh else None
+            if seen is None or seen <= t:
+                return h
+            h -= 1
+        return h
+
     def header(self, height: int) -> dict | None:
         c = self.canonical()
         return c.headers.get(height) if c else None
