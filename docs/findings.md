@@ -222,6 +222,11 @@ Network logging was turned on for `op-g6950-hdd` at runtime at 16:17:03, at `net
   - That equals, to the byte, the kernel receive queue (`Recv-Q`) on `op-g6950-hdd`'s socket. So the data had arrived at the machine, but `monerod` hadn't read it.
   - In the other direction the counters matched exactly, so nothing was outstanding.
 - **Per-transaction verification (measured, `HASH … ms:` lines, 15 min to ~16:56):** `op-g6950-hdd` p90 **103 ms**, max 137 ms; `ref-a` p90 30 ms, max 36 ms.
+- **Drop reasons over the logged hour (measured, `op-g6950-hdd` `bitmonero.log`, 16:20:37–17:16):**
+  - 18 connection drops in all.
+  - **17** came from the transaction-request tracker (`Missed tx request more than threshold of the time`).
+  - **1**, at 16:50:54, came from the block-download path (`Failed to request missing objects, dropping connection`, logged as ERROR).
+  - Extra logging was set back to the defaults on both nodes at 17:16. With it on, `op-g6950-hdd`'s log grew ~35 MB in that hour.
 - **Unexplained (measured):**
   - Three request batches (100 transactions) that `op-g6950-hdd` sent on the link `ref-a` had opened never appear in `ref-a`'s log.
   - `op-g6950-hdd` dropped that link for missed requests at 16:51:33.
