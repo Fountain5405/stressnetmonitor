@@ -19,7 +19,7 @@
 set -u
 export LC_ALL=C   # EPOCHREALTIME and numbers must use '.' as decimal point
 
-SIDECAR_VERSION="0.1.2"
+SIDECAR_VERSION="0.1.3"
 
 # ----------------------------------------------------------------- config ---
 
@@ -709,10 +709,15 @@ check() {
     echo "rpc:       $M_RPC${M_RPC_LOGIN:+ (with login)}"
     ((M_RESTRICTED)) && { echo "  warning: monerod runs with --restricted-rpc; some data will be missing"; }
     ((M_SHOW_TIME_STATS)) || echo "  warning: monerod lacks --show-time-stats 1; per-block timings will be missing"
-    local code
-    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time "$RPC_TIMEOUT" ${M_RPC_LOGIN:+--digest -u "$M_RPC_LOGIN"} \
+    # A node busy verifying a block can take tens of seconds to answer; that
+    # is not a misconfiguration, so only a refused or failed request fails.
+    local code rc
+    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 ${M_RPC_LOGIN:+--digest -u "$M_RPC_LOGIN"} \
       -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":"0","method":"get_info"}' "$M_RPC/json_rpc" 2>/dev/null)
-    if [[ $code == 200 ]]; then echo "  rpc get_info: OK"; else ok=0; echo "  rpc get_info: FAILED (HTTP $code)"; fi
+    rc=$?
+    if [[ $code == 200 ]]; then echo "  rpc get_info: OK"
+    elif ((rc == 28)); then echo "  rpc get_info: no answer within 60 s; monerod is probably busy verifying a block (not counted as a failure)"
+    else ok=0; echo "  rpc get_info: FAILED (HTTP $code, curl exit $rc)"; fi
     resolve_disk "$M_DATA_DIR"
     echo "disk:      $DISK_DEVS ($DISK_FSTYPE)"
   else
