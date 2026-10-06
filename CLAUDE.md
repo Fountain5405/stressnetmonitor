@@ -7,6 +7,7 @@ This is a public repo. Never commit LAN IPs, hostnames, tokens, personal paths, 
 - **Bash trap:** `exec {fd}<> x 2>/dev/null` makes the `2>/dev/null` permanent for the whole script. Wrap it in `{ exec ...; } 2>/dev/null`.
 - **Process-name trap:** the sidecar's process name is `bash`, not `msnm-sidecar`, because of its `#!/usr/bin/env bash` shebang. To find it, match the full command line (`pgrep -f '^bash <path>'`), never `pgrep -x msnm-sidecar`.
 - **Parquet tables are a pure function of the raw batches.** `msnm reparse` must be able to rebuild them, so parsing must not depend on hub-time state. Hub-observed tables (`ref_block`, `zmq_*`, `node_state`) are the only exceptions.
+- **`docs/findings.md` is public research output.** Use node pseudonyms only (no IPs or hostnames), true block heights, and mark each point as measured or hypothesis, with the table that holds its data.
 - **Parquet types stay R-friendly**: int32 heights, float64 counters, UTC timestamps, no uint64. Tables and columns that overlap Rucknium/monerod-monitor keep its names.
 - **monerod facts the code depends on:**
   - `get_info.height` is the chain length; the top block is `height - 1`.
