@@ -209,10 +209,31 @@ Network logging was turned on for `op-g6950-hdd` at runtime at 16:17:03, at `net
   - Of the stale ones, 133 arrived later (35–90 s after the request) and 287 weren't seen in the window at all.
   - The stale share varied a lot between 30 s periods: 81%, 13%, 29%, 0% and 24%.
 - **Not block verification (measured):** `op-g6950-hdd` added no block between 16:15:22 and 16:24:51, so the 16:22 drop happened while it wasn't verifying a block at all.
-- **Hypotheses:**
-  - **Leading, untested:** `ref-a` is asked for transactions it doesn't have in its pool as "broadcasted", for example ones still in the Dandelion++ stem/embargo phase, or ones already gone. It silently leaves them out of its replies. `ref-a`'s `net.p2p.msg` INFO log would show `Requested tx … not found in pool` for those hashes.
-  - **Secondary:** the 133 late replies suggest that `op-g6950-hdd` is sometimes slow to read incoming messages.
-  - **Consequence to report upstream:** with the lifetime-cumulative 70% rule, a peer that legitimately can't serve some announced transactions gets dropped again and again. A node with one or a few peers is cut off repeatedly under load. Between 10:00 and 14:00 that was 11–19 times an hour.
+- **The first hypothesis, that `ref-a` silently omits transactions, is not supported.** `net.p2p.msg` INFO was enabled on `ref-a` at 16:50:37. See the follow-up below.
+
+#### Follow-up: the replies arrive, but the low-end node doesn't read them in time (16:50–16:56 UTC)
+
+- **`ref-a` answers everything (measured, `ref-a`'s `net.p2p.msg` log, 16:50:37–~16:52:30):**
+  - It received 43 transaction-request messages from all its peers, covering 665 transactions, and replied to every one with the same count.
+  - It logged **no** `Requested tx … not found in pool`.
+  - The two request batches `op-g6950-hdd` sent on its own outbound link (57 and 77 transactions) were logged as received on `ref-a` within 3 ms and answered in full.
+- **The replies wait unread on the low-end node (measured, `get_connections` on both nodes plus `ss` on `op-g6950-hdd`, four samples 16:55:03–16:55:29):**
+  - On `op-g6950-hdd`'s link to `ref-a`, `ref-a`'s `send_count` minus `op-g6950-hdd`'s `recv_count` was **0.58–1.16 MB**.
+  - That equals, to the byte, the kernel receive queue (`Recv-Q`) on `op-g6950-hdd`'s socket. So the data had arrived at the machine, but `monerod` hadn't read it.
+  - In the other direction the counters matched exactly, so nothing was outstanding.
+- **Per-transaction verification (measured, `HASH … ms:` lines, 15 min to ~16:56):** `op-g6950-hdd` p90 **103 ms**, max 137 ms; `ref-a` p90 30 ms, max 36 ms.
+- **Unexplained (measured):**
+  - Three request batches (100 transactions) that `op-g6950-hdd` sent on the link `ref-a` had opened never appear in `ref-a`'s log.
+  - `op-g6950-hdd` dropped that link for missed requests at 16:51:33.
+  - A possible explanation is that `ref-a` had already closed that connection on its side, but that isn't checked.
+- **Hypothesis (leading; consistent with the measurements but the mechanism isn't confirmed in code):**
+  - `monerod` handles one connection's messages one at a time.
+  - On the low-end CPU, a reply carrying N transactions takes about N × 0.1 s to verify. So a reply queued behind a few large batches on the same connection isn't read until more than 30 s after the request was sent.
+  - The tracker counts from when the request was *sent*, so it blames the peer.
+  - That would explain three things: replies are fast when the queue is empty; some arrive 35–90 s late; and the 30 s timeouts cluster in some periods but not others.
+- **Consequence to report upstream:**
+  - A node that is slow to verify transactions marks its honest peers as failing and drops them.
+  - Because the 70% rule is cumulative over the connection's life, and the reconnect is then blocked for 15–30 s, a node with one or a few peers is cut off repeatedly under load: 11–19 times an hour between 10:00 and 14:00.
 
 ---
 
