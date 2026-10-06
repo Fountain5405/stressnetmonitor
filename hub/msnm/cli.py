@@ -1,7 +1,7 @@
 """msnm command line.
 
   msnm serve -c hub.yaml
-  msnm node add NODE_ID --tier operator|trusted|volunteer --position lan|remote [--note ...]
+  msnm node add NODE_ID [NODE_ID ...] --tier operator|trusted|volunteer --position lan|remote [--note ...]
   msnm node list | revoke NODE_ID | rotate-token NODE_ID | set NODE_ID [--tier ..] [--position ..]
   msnm reparse --out DIR [--node NODE_ID]   rebuild sidecar tables from the raw archive
   msnm verify-ledger                        check the raw archive's hash chain
@@ -34,7 +34,7 @@ def _registry(cfg) -> Registry:
 REPO = "https://github.com/Fountain5405/stressnetmonitor"
 
 # Plain text, no markdown: it gets pasted into chat clients as is.
-WELCOME = """\
+WELCOME_ONE = """\
 Thanks for running a stressnet sidecar!
 
 Node name: {node_id}
@@ -42,8 +42,23 @@ Hub URL: {hub_url}
 Token: {token}
 
 Please keep the token private. It identifies your node to the hub.
+"""
 
-Step 1. Add these options to monerod and restart it:
+WELCOME_MANY = """\
+Thanks for running stressnet sidecars!
+
+Hub URL: {hub_url}
+
+You have {n} nodes, each with its own token. Use a different one on each
+machine, and keep the list so you know which machine is which:
+
+{tokens}
+
+Please keep the tokens private. Each one identifies one node to the hub.
+"""
+
+WELCOME_STEPS = """
+Step 1. {step1} these options to monerod and restart it:
 
 --show-time-stats 1 --log-level 0,blockchain:INFO,txpool:INFO
 
@@ -51,22 +66,38 @@ On v0.19.0.0-beta.3.0, also add these seed nodes (its built-in ones are dead):
 
 --seed-node 185.141.216.177:28180 --seed-node 208.123.187.228:28080 --seed-node 185.141.216.147:28080 --seed-node 209.141.41.69:28080
 
-Step 2. On the same machine, run:
+Step 2. On {step2}, run:
 
 git clone {repo}.git
 cd stressnetmonitor
 sudo ./sidecar/install.sh --hub {hub_url}
 
-The installer asks for the token, checks everything, and starts the sidecar
-as a systemd service. Without sudo or systemd, run this instead, as the user
-that runs monerod:
+The installer asks for the token{which}, checks everything,
+and starts the sidecar as a systemd service. Without sudo or systemd,
+run this instead, as the user that runs monerod:
 
 ./sidecar/install.sh --hub {hub_url} --no-systemd
 
 What it sends and how to remove it: {repo}/blob/main/docs/sidecar.md
 
-Once it's running, please tell me your hardware: CPU, RAM, and SSD or HDD.
+The sidecar reports the hardware itself (CPU, RAM, disk type). Do tell me
+about anything it can't see, such as other heavy work on the same machine.
 """
+
+
+def welcome_text(hub_url: str, nodes: list[tuple[str, str]]) -> str:
+    """The operator's copy-paste message for one or more (node_id, token) pairs."""
+    if len(nodes) == 1:
+        head = WELCOME_ONE.format(node_id=nodes[0][0], hub_url=hub_url, token=nodes[0][1])
+        which = ""
+        step1, step2 = "Add", "the same machine"
+    else:
+        head = WELCOME_MANY.format(hub_url=hub_url, n=len(nodes),
+                                   tokens="\n".join(f"{i}: {t}" for i, t in nodes))
+        which = " (that machine's own)"
+        step1, step2 = "On each machine, add", "each machine"
+    return head + WELCOME_STEPS.format(hub_url=hub_url, repo=REPO, which=which,
+                                       step1=step1, step2=step2)
 
 NEW_TOKEN = """\
 Here is a new token for your stressnet sidecar ({node_id}). The old one no longer works.
@@ -106,12 +137,19 @@ def cmd_node(cfg, args) -> int:
     reg = _registry(cfg)
     hub_url = getattr(args, "hub_url", None) or cfg.public_url or "https://<your-hub>"
     if args.node_cmd == "add":
-        token = reg.add(args.node_id, args.tier, args.position, args.note or "")
-        path = _write_message(cfg, args.node_id, WELCOME.format(
-            node_id=args.node_id, hub_url=hub_url, token=token, repo=REPO))
-        print(f"node {args.node_id} added ({args.tier}, {args.position}).")
-        print(f"Token (shown once; give it only to this node's operator): {token}")
+        # Several ids = one operator running several sidecars: one token each,
+        # one message. Check them all first so a bad id doesn't leave a half-done batch.
+        ids = args.node_id
+        taken = {n.node_id for n in reg.all()}
+        bad = sorted({i for i in ids if i in taken} | {i for i in ids if ids.count(i) > 1})
+        if bad:
+            raise ValueError(f"node id already exists or repeated: {', '.join(bad)}")
+        nodes = [(i, reg.add(i, args.tier, args.position, args.note or "")) for i in ids]
+        path = _write_message(cfg, "+".join(ids), welcome_text(hub_url, nodes))
+        for i, token in nodes:
+            print(f"node {i} added ({args.tier}, {args.position}). Token (shown once): {token}")
         print(f"Message for the operator, ready to paste: {path}")
+        print("The running hub accepts new tokens within 10 s.")
     elif args.node_cmd == "rotate-token":
         token = reg.rotate(args.node_id)
         path = _write_message(cfg, args.node_id, NEW_TOKEN.format(
@@ -191,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
     pn = sub.add_parser("node")
     nsub = pn.add_subparsers(dest="node_cmd", required=True)
     a = nsub.add_parser("add")
-    a.add_argument("node_id")
+    a.add_argument("node_id", nargs="+", help="several ids: one operator, one token each, one message")
     a.add_argument("--tier", required=True, choices=TIERS)
     a.add_argument("--position", required=True, choices=POSITIONS)
     a.add_argument("--note")

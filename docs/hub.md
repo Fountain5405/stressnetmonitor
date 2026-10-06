@@ -32,10 +32,18 @@ Give each node a **pseudonym**. It appears on public dashboards.
 
 ```bash
 .venv/bin/msnm -c hub.yaml node add vol-07 --tier volunteer --position remote \
-    --note "matrix: @someone, ThinkPad X230" --hub-url https://msnm.example.org
+    --note "matrix: @someone, ThinkPad X230"
 ```
 
-This prints a token (shown once) and the sidecar config lines to send to the volunteer. The `--note` stays private in the registry.
+This prints the token (shown once). It also writes a plain-text message for the volunteer, ready to paste into chat, to `data_dir/welcome/vol-07.txt`, readable only by you. The message has the hub URL (`public_url` in the config, or `--hub-url`), the token, the `monerod` flags and the install steps. The `--note` stays private in the registry.
+
+One person running several sidecars needs one token per machine, but only one message. Name them all in one command:
+
+```bash
+.venv/bin/msnm -c hub.yaml node add vol-08a vol-08b vol-08c --tier volunteer --position remote
+```
+
+That writes `welcome/vol-08a+vol-08b+vol-08c.txt`, with each node's token on its own line. `node rotate-token ID` writes a short new-token message to `welcome/ID.txt`.
 
 - `--tier`: `operator` (your machines), `trusted` (known people), or `volunteer`. Every row of data can be filtered by tier. Base headline results on `operator` and `trusted`.
 - `--position`: `lan` (same LAN as the tx generator) or `remote`.

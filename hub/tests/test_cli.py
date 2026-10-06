@@ -28,6 +28,28 @@ def test_node_add_writes_plain_message(tmp_path, capsys):
     assert "`" not in text and "**" not in text   # plain text, no markdown
 
 
+def test_node_add_several_writes_one_message(tmp_path, capsys):
+    cfg = _cfg(tmp_path)
+    assert main(["-c", cfg, "node", "add", "op2a", "op2b", "--tier", "volunteer",
+                 "--position", "remote"]) == 0
+    out = capsys.readouterr().out
+    tokens = dict(line.split(" added", 1)[0].split()[1:] + [line.rsplit(" ", 1)[1]]
+                  for line in out.splitlines() if "Token (shown once)" in line)
+    assert set(tokens) == {"op2a", "op2b"}
+    text = (tmp_path / "data" / "welcome" / "op2a+op2b.txt").read_text()
+    assert f"op2a: {tokens['op2a']}\nop2b: {tokens['op2b']}\n" in text
+    assert "You have 2 nodes" in text and "Token:" not in text
+    # A taken or repeated id rejects the whole batch before anything is added.
+    assert main(["-c", cfg, "node", "add", "op2c", "op2a", "--tier", "volunteer",
+                 "--position", "remote"]) == 1
+    assert main(["-c", cfg, "node", "add", "op2d", "op2d", "--tier", "volunteer",
+                 "--position", "remote"]) == 1
+    capsys.readouterr()
+    main(["-c", cfg, "node", "list"])
+    listed = capsys.readouterr().out
+    assert "op2c" not in listed and "op2d" not in listed
+
+
 def test_rotate_token_rewrites_message(tmp_path, capsys):
     cfg = _cfg(tmp_path)
     main(["-c", cfg, "node", "add", "vol-y", "--tier", "volunteer", "--position", "remote"])
