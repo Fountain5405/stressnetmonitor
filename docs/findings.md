@@ -153,6 +153,67 @@ Raw sidecar batches are kept as well, and the tables can be rebuilt from them wi
   - It keeps up with the chain, but with delays of up to minutes, and its RPC is unusable while it verifies.
   - What isn't yet separated is the split of the time between CPU (FCMP++ verification) and disk. A rough split could come from `host_sample` iowait and the `block_timing` fields.
 
+### Full blocks sustained for 3+ hours; steady ~20 s per block; the low-end node's only peer link drops a few times an hour (~10:00–13:15 UTC)
+
+- **Load (measured, `block_timing.cumulative_weight`):** from ~10:00 the hourly median block is **10.1–10.2 MB**, so every block is full, compared with 1.5–5.6 MB overnight. The network produced only 20–27 blocks per hour.
+- **Block timing (measured, `block_timing`):** per-hour medians stayed flat for over three hours.
+
+  | Hour (UTC) | `ref-a` median / max | `op-g6950-hdd` median / max | `op-g6950-hdd` median `t3` |
+  |---|---|---|---|
+  | 10 | 0.59 / 0.61 s | **19.4 / 20.2 s** | 17.8 s |
+  | 11 | 0.59 / 0.60 s | **19.7 / 20.6 s** | 17.9 s |
+  | 12 | 0.59 / 0.60 s | **19.9 / 20.2 s** | 18.2 s |
+
+  So the 15–19 s of the earlier burst is the steady state at this load, not a transient. `t3` (block transactions not already in the pool) is still ~90% of the time.
+- **Pool snapshot (measured, `get_info` at 13:16):** `op-g6950-hdd` held 6,349 transactions, against 10,700 on `ref-a`. That is a size snapshot, not an admission rate.
+- **RPC (measured, `rpc_error`):** 13–22 timed-out polls per hour on `op-g6950-hdd` between 10:00 and 13:00, against 1–2 per hour overnight.
+- **Peer link (measured, `info.outgoing_connections_count`; `bitmonero.log`):**
+  - From ~09:00, `op-g6950-hdd`'s single outbound connection to `ref-a` is missing in 4–6 polls per hour. Each gap is one poll (≤ ~30 s). There were none from 09:00 on 10-05 until 09:00 on 10-06, except one at 20:00.
+  - `monerod` logged "monerod is now disconnected from the network" 5 times between 10:00 and 13:15.
+  - `ref-a` never lost its outbound peers in the same period.
+- **The gaps are part of constant connection churn (measured, `connections`, checked at 14:15):** the two nodes hold one connection in each direction.
+
+  | Period | New connections per hour (out / in) | Longest connection |
+  |---|---|---|
+  | 18:00 on 10-05 to 09:00 on 10-06, lighter load | usually 1 / 1 | hours: ~10 h outbound, ~4.5 h inbound |
+  | 10:00–14:00 on 10-06, full blocks | **11–14 / 16–19** | **6–16 min** |
+
+  - Both ends see it: `ref-a`'s rows for this peer show the same connections being replaced.
+  - A poll shows `outgoing_connections_count` = 0 only when it falls between a drop and the reconnect.
+  - The `connections` rows before a drop look ordinary: state `normal`, receive idle ≤ ~70 s.
+  - So which side closes the link, and why, isn't visible in the data collected now.
+- **Hypotheses:**
+  - **Not supported:** block verification blocking the P2P link. None of the 5 logged disconnects fell inside a block's verification window, which is `log_time − total_ms` to `log_time`, ±2 s. Block verification covered only ~11% of the time since 09:30.
+  - **Now explained by the transaction-request tracker:** see the next entry.
+- **Load easing (measured):** in 14:00–14:15 the median block was 6.7 MB on `ref-a`, and `op-g6950-hdd` took a median 14.7 s per block. 13:00–14:00 had 30 blocks at 10.2 MB, with a median 19.9 s per block on `op-g6950-hdd`.
+
+### The link drops come from v0.19's transaction-request tracker, which gives up on its only peer (16:17–16:25 UTC)
+
+Network logging was turned on for `op-g6950-hdd` at runtime at 16:17:03, at `net.p2p`/`net.cn` DEBUG plus `net.p2p.msg` and `default` INFO. `ref-a`'s logging stayed at the default.
+
+- **What triggers the drop (measured, `bitmonero.log` on `op-g6950-hdd`):** at 16:22:31.755 the request tracker logged that `ref-a` had missed **709 of 992** transaction requests on that connection (**71%**). The next line is `Missed tx request more than threshold of the time, dropping peer`. `op-g6950-hdd` then dropped its outbound connection to `ref-a` with score 0, so no ban. The miss rate for that connection had climbed steadily before that: 50% → 54% → 60% → 65% → 67% → 71% over the previous ~80 s.
+- **The rule (from source, v0.19.0.0-beta.3.0):**
+  - A transaction request counts as missed when no reply arrives within 30 s (`P2P_DEFAULT_REQUEST_TIMEOUT`).
+  - The peer is dropped when more than 70% of its requests are missed (`P2P_REQUEST_FAILURE_THRESHOLD_PERCENTAGE`), once there are at least 5 (`P2P_MIN_SAMPLE_SIZE_FOR_DROPPING`).
+  - The counts are kept per connection and accumulate for its whole life.
+  - When the answering node (`handle_request_tx_pool_txs`) doesn't have a requested transaction in its pool as "broadcasted", it leaves it out of the reply without saying so. The requester only finds out by the 30 s timeout.
+  - A source comment notes that drops are not turned into bans "since we've observed honest peers get banned due to long response times on stressnet".
+- **The reconnect is blocked for 15–30 s (measured):**
+  - The old socket closes only 16–29 s after the drop (`closed in state normal`).
+  - Meanwhile every reconnect attempt, about one per second, is closed before the handshake: 27 attempts at 16:18 and 14 at 16:22. The likely cause is the one-inbound-connection-per-address limit (`has_too_many_connections`), which still counts the old connection on `ref-a`.
+  - `op-g6950-hdd` itself logged `CONNECTION FROM <ref-a> REFUSED, too many connections from the same address` for `ref-a`'s reconnects in the other direction.
+  - With a single peer, the node is cut off for that time, and its own transactions can't be relayed (`Unable to send transaction(s), no available connections`).
+- **Replies are either fast or absent (measured, requests made 16:21:15–16:23:50):**
+  - 1,476 requests; 420 (28%) went stale. The stale ages were 30.3–33.1 s, so they were removed right at the timeout.
+  - Requests that were answered got their reply in **0.1–0.2 s**.
+  - Of the stale ones, 133 arrived later (35–90 s after the request) and 287 weren't seen in the window at all.
+  - The stale share varied a lot between 30 s periods: 81%, 13%, 29%, 0% and 24%.
+- **Not block verification (measured):** `op-g6950-hdd` added no block between 16:15:22 and 16:24:51, so the 16:22 drop happened while it wasn't verifying a block at all.
+- **Hypotheses:**
+  - **Leading, untested:** `ref-a` is asked for transactions it doesn't have in its pool as "broadcasted", for example ones still in the Dandelion++ stem/embargo phase, or ones already gone. It silently leaves them out of its replies. `ref-a`'s `net.p2p.msg` INFO log would show `Requested tx … not found in pool` for those hashes.
+  - **Secondary:** the 133 late replies suggest that `op-g6950-hdd` is sometimes slow to read incoming messages.
+  - **Consequence to report upstream:** with the lifetime-cumulative 70% rule, a peer that legitimately can't serve some announced transactions gets dropped again and again. A node with one or a few peers is cut off repeatedly under load. Between 10:00 and 14:00 that was 11–19 times an hour.
+
 ---
 
 ## Monitor notes
