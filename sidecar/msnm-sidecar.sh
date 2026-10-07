@@ -19,7 +19,7 @@
 set -u
 export LC_ALL=C   # EPOCHREALTIME and numbers must use '.' as decimal point
 
-SIDECAR_VERSION="0.1.3"
+SIDECAR_VERSION="0.1.4"
 
 # ----------------------------------------------------------------- config ---
 
@@ -31,6 +31,7 @@ MONEROD_PID=""             # default: auto-detect
 MONEROD_MATCH="--testnet"  # auto-detect only monerod processes with this arg
 MONEROD_LOG=""             # default: derived from monerod's command line
 DATA_DIR=""                # default: derived from monerod's command line
+SPOOL_DIR_ENV=${SPOOL_DIR:-}
 SPOOL_DIR="${SPOOL_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/msnm-sidecar}"
 HOST_INTERVAL=5            # seconds between /proc samples
 RPC_INTERVAL=30            # seconds between RPC polls
@@ -51,11 +52,12 @@ usage() {
   cat <<EOF
 msnm-sidecar $SIDECAR_VERSION
 
-Usage: $0 [-c CONFIG] [--check | --once]
+Usage: $0 [-c CONFIG] [--check | --once | --status]
 
   -c CONFIG  config file (default: \$MSNM_CONFIG or /etc/msnm-sidecar.conf)
   --check    detect monerod, test RPC and the hub connection, then exit
   --once     collect one batch and print it to stdout (nothing is sent)
+  --status   is the running sidecar getting data to the hub? (exit 0 if yes)
 EOF
 }
 
@@ -64,6 +66,7 @@ while (($#)); do
     -c|--config) CONFIG=$2; shift 2 ;;
     --check) MODE=check; shift ;;
     --once) MODE=once; shift ;;
+    --status) MODE=status; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
   esac
@@ -116,7 +119,13 @@ HAVE_GZIP=0; command -v gzip >/dev/null && HAVE_GZIP=1
 # system users often have no writable home, and the service's spool belongs
 # to the running service.
 CONF_SPOOL_DIR=$SPOOL_DIR
-if [[ $MODE != run ]]; then
+# --status reads the running sidecar's spool. A systemd install sets SPOOL_DIR
+# in the unit, not the config, so look there when run with the system config.
+if [[ $MODE == status && -z $SPOOL_DIR_ENV && $CONFIG == /etc/msnm-sidecar.conf &&
+      ! -e $SPOOL_DIR/status && -e /var/lib/msnm-sidecar/status ]]; then
+  SPOOL_DIR=/var/lib/msnm-sidecar CONF_SPOOL_DIR=/var/lib/msnm-sidecar
+fi
+if [[ $MODE == check || $MODE == once ]]; then
   SPOOL_DIR=$(mktemp -d "${TMPDIR:-/tmp}/msnm-sidecar-$MODE.XXXXXX") || die "mktemp failed"
   trap 'rm -rf "$SPOOL_DIR"' EXIT
 fi
@@ -124,10 +133,13 @@ fi
 OUTBOX="$SPOOL_DIR/outbox"   # batches and bundles waiting to be pushed
 INBOX="$SPOOL_DIR/inbox"     # complete record files from background jobs
 WORK="$SPOOL_DIR/work"
-mkdir -p "$OUTBOX" "$INBOX" "$WORK" || die "cannot create spool dir $SPOOL_DIR"
+[[ $MODE == status ]] || mkdir -p "$OUTBOX" "$INBOX" "$WORK" || die "cannot create spool dir $SPOOL_DIR"
 HOST_CUR="$SPOOL_DIR/host.cur"   # written only by the main loop
 LOG_CUR="$SPOOL_DIR/log.cur"     # written only by the log follower
 SEQ_FILE="$SPOOL_DIR/seq"
+# key<TAB>value lines about the push side, for --status and the installer.
+# Written at startup and after each push round that sent or failed something.
+STATUS_FILE="$SPOOL_DIR/status"
 
 SEQ=0
 if [[ -r $SEQ_FILE ]]; then read -r SEQ < "$SEQ_FILE" || SEQ=0; fi
@@ -647,9 +659,33 @@ enforce_spool_limit() {
   done
 }
 
+# Status file: one key<TAB>value per line. Plain printf, no temp file + mv, to
+# keep the push round at one external process per batch; readers tolerate a
+# half-written file.
+write_status() {
+  printf 'pid\t%s\nstarted\t%s\nhub_node\t%s\nfirst_ok\t%s\nlast_ok\t%s\nsent\t%s\nfail_streak\t%s\nlast_fail\t%s\nlast_error\t%s\n' \
+    "$ST_pid" "$ST_started" "$ST_hub_node" "$ST_first_ok" "$ST_last_ok" "$ST_sent" \
+    "$ST_fail_streak" "$ST_last_fail" "$ST_last_error" > "$STATUS_FILE"
+}
+read_status() {
+  local k v
+  ST_pid="" ST_started="" ST_hub_node="" ST_first_ok="" ST_last_ok="" ST_sent=0
+  ST_fail_streak=0 ST_last_fail="" ST_last_error=""
+  [[ -r $STATUS_FILE ]] || return 1
+  while IFS=$'\t' read -r k v; do
+    case $k in
+      pid|started|hub_node|first_ok|last_ok|sent|fail_streak|last_fail|last_error) printf -v "ST_$k" '%s' "$v" ;;
+    esac
+  done < "$STATUS_FILE"
+  [[ $ST_sent =~ ^[0-9]+$ ]] || ST_sent=0
+  [[ $ST_fail_streak =~ ^[0-9]+$ ]] || ST_fail_streak=0
+}
+
 # Push queued batches and bundles, oldest first. Runs in the background.
+# Tells the operator, once each: the first batch the hub accepted, a failure
+# streak starting (then hourly while it lasts), and the hub being back.
 push_outbox() {
-  local f path code enc resp="$SPOOL_DIR/push.resp" sent
+  local f path code rc enc resp="$SPOOL_DIR/push.resp" sent n=0 err=""
   for f in "$OUTBOX"/batch.* "$OUTBOX"/bundle.*; do
     [[ -e $f && $f != *.tmp ]] || continue
     enc=()
@@ -664,13 +700,37 @@ push_outbox() {
       -H "Authorization: Bearer $TOKEN" -H "X-MSNM-Sent: $sent" \
       -H "X-MSNM-Sidecar: $SIDECAR_VERSION" "${enc[@]}" \
       --data-binary @"$f" "$HUB_URL$path" 2>/dev/null)
+    rc=$?
     case $code in
-      2??) rm -f "$f"; handle_response "$resp" ;;
-      401|403) say "hub rejected token (HTTP $code); check TOKEN"; return 1 ;;
+      2??) rm -f "$f"; n=$((n + 1)); handle_response "$resp" ;;
+      401|403) err="the hub rejected the token (HTTP $code); check TOKEN in $CONFIG"; break ;;
       413) say "hub rejected ${f##*/} as too large; dropping"; rm -f "$f" ;;
-      *) return 1 ;;   # hub unreachable or erroring: retry next round
+      000) err="can't reach the hub at $HUB_URL (curl exit $rc)"; break ;;
+      *) err="the hub answered HTTP $code"; break ;;   # retry next round
     esac
   done
+  ((n == 0)) && [[ -z $err ]] && return 0   # nothing was queued
+  read_status
+  now
+  if ((n)); then
+    if [[ -z $ST_first_ok ]]; then
+      say "connected: the hub accepted this node's first batch${ST_hub_node:+ (node $ST_hub_node)}; data is flowing"
+      ST_first_ok=${NOW%.*}
+    elif ((ST_fail_streak)); then
+      say "hub reachable again after $ST_fail_streak failed attempt(s); sent $n queued batch(es)"
+    fi
+    ST_last_ok=${NOW%.*}; ST_sent=$((ST_sent + n)); ST_fail_streak=0
+  fi
+  if [[ -n $err ]]; then
+    ST_fail_streak=$((ST_fail_streak + 1)); ST_last_fail=${NOW%.*}; ST_last_error=$err
+    if ((ST_fail_streak == 1)); then
+      say "push failed: $err. Batches are kept (up to $SPOOL_MAX_MB MB) and retried every $PUSH_INTERVAL s"
+    elif ((ST_fail_streak % (PUSH_INTERVAL < 3600 ? 3600 / PUSH_INTERVAL : 1) == 0)); then
+      say "still failing after $ST_fail_streak attempts: $err"
+    fi
+  fi
+  write_status
+  [[ -z $err ]]
 }
 
 # The hub can ask for a log-tail bundle (e.g. when it sees this node stalled).
@@ -739,8 +799,69 @@ check() {
   ((ok))
 }
 
+ago() {   # seconds -> "14 s" / "3 min" / "2 h 5 min"
+  local s=$1
+  if ((s < 120)); then echo "$s s"
+  elif ((s < 7200)); then echo "$((s / 60)) min"
+  else echo "$((s / 3600)) h $((s % 3600 / 60)) min"; fi
+}
+utc() { date -u -d "@$1" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || echo "@$1"; }
+
+# --status: is the running sidecar getting data to the hub?
+status() {
+  local ok=1 t pid cmd q n kb line k v hub_age="" hub_state=""
+  printf -v t '%(%s)T' -1
+  echo "msnm-sidecar $SIDECAR_VERSION status (spool $SPOOL_DIR)"
+  if ! read_status; then
+    echo "sidecar:   no status in $SPOOL_DIR. Not started yet, a different spool, or older than 0.1.4."
+    echo "           Run this as the sidecar's user (or with sudo), with the same config."
+    return 1
+  fi
+  pid=$ST_pid; cmd=""
+  [[ -n $pid && -r /proc/$pid/cmdline ]] && cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+  if [[ $cmd == *msnm-sidecar* ]]; then
+    echo "sidecar:   running, pid $pid, started $(utc "$ST_started") ($(ago $((t - ST_started))) ago)"
+  else
+    ok=0; echo "sidecar:   NOT RUNNING (last pid ${pid:-?}, started $(utc "${ST_started:-0}"))"
+  fi
+  if find_monerod; then echo "monerod:   pid $MPID${MONEROD_UNIT:+ (unit $MONEROD_UNIT)}"
+  else ok=0; echo "monerod:   NOT FOUND: $FIND_ERR"; fi
+  if [[ -n $ST_last_ok ]]; then
+    echo "pushes:    last accepted $(ago $((t - ST_last_ok))) ago ($(utc "$ST_last_ok")); $ST_sent batch(es) since start"
+    ((t - ST_last_ok <= 3 * PUSH_INTERVAL + PUSH_TIMEOUT)) || ok=0
+  else
+    ok=0; echo "pushes:    none accepted since the sidecar started"
+  fi
+  n=0; for q in "$OUTBOX"/batch.* "$OUTBOX"/bundle.*; do [[ -e $q ]] && n=$((n + 1)); done
+  kb=$(du -sk "$OUTBOX" 2>/dev/null); kb=${kb%%[[:space:]]*}
+  echo "queue:     $n file(s) waiting (${kb:-0} KiB)"
+  if ((ST_fail_streak)); then
+    echo "problem:   $ST_last_error ($ST_fail_streak failed attempt(s) in a row, last $(ago $((t - ST_last_fail))) ago)"
+  fi
+  # The hub's side: does it have recent data from us?
+  if [[ ! -r $CONFIG ]]; then
+    echo "hub:       can't read $CONFIG as $(id -un); run with sudo to ask the hub as well"
+  elif [[ -n $HUB_URL ]]; then
+    while IFS=$'\t' read -r k v; do
+      case $k in
+        last_batch_age_s) hub_age=$v ;;
+        state) hub_state=$v ;;
+        pong*) line=${k#pong } ;;
+      esac
+    done < <(curl -sS --max-time 15 -H "Authorization: Bearer $TOKEN" "$HUB_URL/v1/ping" 2>/dev/null)
+    if [[ -n ${line:-} ]]; then
+      echo "hub:       $HUB_URL knows this node as $line${hub_age:+; last batch received $(ago "$hub_age") ago}${hub_state:+, state $hub_state}"
+    else
+      ok=0; echo "hub:       $HUB_URL did not answer the ping with this token"
+    fi
+  fi
+  ((ok)) && echo "OK: data is reaching the hub" || echo "NOT OK: see above"
+  ((ok))
+}
+
 case $MODE in
   check) check; exit $? ;;
+  status) status; exit $? ;;
   once)
     find_monerod || say "monerod not found: $FIND_ERR"
     HOST_CUR="$WORK/once.host"; : > "$HOST_CUR"
@@ -764,6 +885,20 @@ cleanup() {
 trap cleanup INT TERM
 
 event sidecar_start "version=$SIDECAR_VERSION"
+# A fresh status: "first batch accepted" is reported once per start. One ping
+# up front so a bad token or URL shows in the log right away.
+read_status; ST_pid=$$; ST_started=${NOW%.*}; ST_first_ok=""; ST_last_ok=""; ST_sent=0
+ST_fail_streak=0; ST_last_fail=""; ST_last_error=""; ST_hub_node=""
+if [[ -n $HUB_URL ]]; then
+  ping_out=$(curl -sS --max-time 15 -w '\n%{http_code}' -H "Authorization: Bearer $TOKEN" "$HUB_URL/v1/ping" 2>/dev/null)
+  case ${ping_out##*$'\n'} in
+    200) ST_hub_node=${ping_out%%$'\n'*}; ST_hub_node=${ST_hub_node#pong }
+         say "hub $HUB_URL accepted the token; this node is ${ST_hub_node:-?}. The first batch goes out in $PUSH_INTERVAL s" ;;
+    401|403) say "hub $HUB_URL REJECTED the token; check TOKEN in $CONFIG" ;;
+    *) say "can't reach the hub at $HUB_URL yet; batches are queued and retried every $PUSH_INTERVAL s" ;;
+  esac
+fi
+write_status
 if find_monerod; then
   event monerod_found "pid=$MPID"
   say "monitoring monerod pid $MPID (rpc $M_RPC, log $M_LOG)"

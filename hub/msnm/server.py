@@ -32,6 +32,15 @@ from .tables import ParquetSink
 log = logging.getLogger(__name__)
 
 
+def ping_text(node_id: str, nl, now: float) -> str:
+    """/v1/ping body. The first line stays "pong NODE_ID" for older sidecars;
+    the key<TAB>value lines after it tell the operator that data is arriving."""
+    lines = [f"pong {node_id}"]
+    if nl is not None and nl.last_batch:
+        lines += [f"last_batch_age_s\t{max(0, int(now - nl.last_batch))}", f"state\t{nl.state}"]
+    return "".join(line + "\n" for line in lines)
+
+
 def gunzip_limited(data: bytes, limit: int) -> bytes:
     d = zlib.decompressobj(16 + zlib.MAX_WBITS)
     out = d.decompress(data, limit + 1)
@@ -86,7 +95,7 @@ class Hub:
 
     async def ping(self, request: web.Request) -> web.Response:
         node = self._auth(request)
-        return web.Response(text=f"pong {node.node_id}\n")
+        return web.Response(text=ping_text(node.node_id, self.monitor.nodes.get(node.node_id), time.time()))
 
     async def ingest(self, request: web.Request) -> web.Response:
         node = self._auth(request)

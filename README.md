@@ -26,7 +26,7 @@ Running a stressnet node, especially on modest hardware? A sidecar next to it se
    sudo ./sidecar/install.sh --hub <hub URL>
    ```
 
-   It asks for your token, checks everything, and starts the sidecar as a systemd service. Without systemd or sudo, run it as your `monerod` user with `--no-systemd` instead, which uses `screen` plus an `@reboot` crontab line.
+   It asks for your token, checks everything, starts the sidecar as a systemd service, and confirms once the hub has received its first batch. Later, `sudo msnm-sidecar --status` tells you whether data is still reaching the hub. Without systemd or sudo, run it as your `monerod` user with `--no-systemd` instead, which uses `screen` plus an `@reboot` crontab line.
 
 Details:
 - what it sends;

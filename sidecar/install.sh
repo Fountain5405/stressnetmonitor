@@ -430,6 +430,31 @@ fi
 
 # ----------------------------------------------------------------- start ---
 
+# Wait for proof that data arrives: the sidecar records the hub's first
+# accepted batch in its status file (sidecar >= 0.1.4).
+wait_connected() {   # wait_connected <epoch the sidecar was started after>
+  local since=$1 i k v started="" first="" err="" node=""
+  printf '%s' "Waiting for the hub to accept the first batch (up to 2 min)"
+  for i in $(seq 1 24); do
+    sleep 5; printf '.'
+    started="" first="" err="" node=""
+    if [[ -r $STATE/status ]]; then
+      while IFS=$'\t' read -r k v; do
+        case $k in started) started=$v ;; first_ok) first=$v ;; last_error) err=$v ;; hub_node) node=$v ;; esac
+      done < "$STATE/status"
+    fi
+    [[ -n $first && ${started:-0} -ge $since ]] && break
+  done
+  echo
+  if [[ -n $first && ${started:-0} -ge $since ]]; then
+    say "Connected: the hub accepted this node's first batch at $(date -u -d "@$first" '+%H:%M:%S UTC')${node:+ (node $node)}. Data is flowing."
+    return 0
+  fi
+  warn "Not confirmed yet${err:+: $err}."
+  note "The sidecar keeps retrying every 30 s and keeps the data until the hub takes it."
+  return 1
+}
+
 echo
 if ! ((CHECK_OK || FORCE)); then
   say "Some checks failed (see above). $CONF was not changed and the sidecar was left as it was."
@@ -445,10 +470,12 @@ if [[ $MODE == systemd ]]; then
     say "Not started (--no-start). Start it with: sudo systemctl enable --now $SERVICE"
   else
     systemctl enable --quiet "$SERVICE"
+    since=$(date +%s)
     systemctl restart "$SERVICE"
     sleep 3
     if systemctl is-active --quiet "$SERVICE"; then
       say "$SERVICE is running."
+      wait_connected "$since" || true
     else
       journalctl -u "$SERVICE" -n 20 --no-pager >&2 || true
       die "$SERVICE failed to start (log above)"
@@ -456,6 +483,7 @@ if [[ $MODE == systemd ]]; then
   fi
   cat <<EOF
 
+    Is it working?             sudo $BIN --status
     See exactly what is sent:  sudo -u $RUN_USER $BIN --once | less
     Follow the sidecar's log:  journalctl -u $SERVICE -f
     Upgrade later:             git pull && sudo $HERE/install.sh
@@ -468,13 +496,16 @@ else
     say "Not started (--no-start). Start it with: $(start_cmd)"
   else
     user_stop   # an older copy, when upgrading
+    since=$(date +%s)
     user_start || die "the sidecar didn't stay running; run it in the foreground to see why: $BIN -c $CONF"
     say "msnm-sidecar is running (lowest CPU and IO priority)."
+    wait_connected "$since" || true
   fi
   if command -v screen >/dev/null; then where="screen -r $SCREEN_NAME   (detach again: Ctrl-a d)"
   else where="tail -f $STATE/sidecar.log"; fi
   cat <<EOF
 
+    Is it working?             $BIN -c $CONF --status
     See exactly what is sent:  $BIN -c $CONF --once | less
     Follow the sidecar's log:  $where
     Upgrade later:             git pull && $HERE/install.sh --no-systemd

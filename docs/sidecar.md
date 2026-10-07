@@ -25,9 +25,21 @@ You need Linux, a stressnet node (`monerod` v0.19.0.0-beta.3.0 with `--testnet`)
    - finds your `monerod --testnet` process and the user it runs as;
    - installs the sidecar as a systemd service running as that user;
    - checks that it can reach `monerod` and the hub, and starts only if everything passes;
-   - tells you if `monerod` is missing any of the flags above. It never changes or restarts `monerod` itself.
+   - tells you if `monerod` is missing any of the flags above. It never changes or restarts `monerod` itself;
+   - waits for the hub to accept the first batch, and says so: `Connected: the hub accepted this node's first batch at 02:33:31 UTC (node vol-07). Data is flowing.`
 
    If a check fails, for example because of a mistyped token, nothing is changed. Fix the problem and run it again.
+
+**Is it working?** `sudo msnm-sidecar --status` (sidecar 0.1.4 or later) shows:
+- whether the sidecar is running;
+- when the hub last accepted a batch;
+- whether anything is queued;
+- the hub's own view: when it last received a batch from you, and the node's state.
+
+It ends with `OK: data is reaching the hub` and exits 0, or `NOT OK` with the reason. The sidecar's log also tells you:
+- once when the first batch is accepted;
+- once when pushes start failing, then hourly while they keep failing;
+- once when the hub is reachable again.
 
 **Without systemd or sudo:** run the installer as the user that runs `monerod`, with `--no-systemd`. See [Running without systemd](#running-without-systemd).
 
@@ -94,6 +106,7 @@ It then:
 - adds an `@reboot` line to your crontab so it starts again after a reboot. Use `--no-cron` to skip that.
 
 - See it running: `screen -r msnm-sidecar` (detach again with Ctrl-a d).
+- Is it working: `~/.local/bin/msnm-sidecar -c ~/.config/msnm-sidecar.conf --status`.
 - Upgrade: `git pull && ./sidecar/install.sh --no-systemd`.
 - Remove: `./sidecar/install.sh --no-systemd --uninstall`. This also removes the crontab line.
 

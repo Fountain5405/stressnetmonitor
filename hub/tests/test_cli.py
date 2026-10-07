@@ -50,6 +50,14 @@ def test_node_add_several_writes_one_message(tmp_path, capsys):
     assert "op2c" not in listed and "op2d" not in listed
 
 
+def test_ping_text():
+    from types import SimpleNamespace
+    from msnm.server import ping_text
+    assert ping_text("vol-x", None, 100.0) == "pong vol-x\n"          # no data yet
+    nl = SimpleNamespace(last_batch=86.4, state="OK")
+    assert ping_text("vol-x", nl, 100.0) == "pong vol-x\nlast_batch_age_s\t13\nstate\tOK\n"
+
+
 def test_rotate_token_rewrites_message(tmp_path, capsys):
     cfg = _cfg(tmp_path)
     main(["-c", cfg, "node", "add", "vol-y", "--tier", "volunteer", "--position", "remote"])
