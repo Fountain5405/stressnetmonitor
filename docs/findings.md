@@ -240,6 +240,61 @@ Network logging was turned on for `op-g6950-hdd` at runtime at 16:17:03, at `net
   - A node that is slow to verify transactions marks its honest peers as failing and drops them.
   - Because the 70% rule is cumulative over the connection's life, and the reconnect is then blocked for 15–30 s, a node with one or a few peers is cut off repeatedly under load: 11–19 times an hour between 10:00 and 14:00.
 
+### Setup change: the low-end node gets outbound internet peers (17:56 UTC)
+
+The aim is to test whether the drops above also happen with a normal peer set, rather than a single peer.
+
+- **Configuration change:**
+  - Before: `op-g6950-hdd` peered only with `ref-a` (`--add-exclusive-node`).
+  - Since 17:56:24 UTC: `ref-a` is a priority node, plus four `--seed-node`s and the default 12 outbound connections.
+  - It still accepts no inbound connections from the internet: the router forwards no ports.
+  - The restart took 16 s, and the height was unchanged at 3,103,861.
+- **Finding peers is slow (measured, `get_connections`; `net.p2p` INFO for 60 s at 18:01:31):**
+  - In that minute it made 17 outbound attempts. 14 failed to connect (dead peer-list entries), and 12 handshakes were closed by the remote end (`LEVIN_ERROR_CONNECTION_DESTROYED`).
+  - 2 of the 7 hosts that refused were peers `ref-a` already had. Both nodes share one public IP, and `monerod` accepts one inbound connection per address, so a second node behind the same NAT can only use peers the first isn't connected to.
+  - The other 5 refusals are unexplained. Full or overloaded nodes are possible.
+  - Its first internet peer arrived at 18:05:41, about 9 minutes after the restart.
+- **Capped at 4 outbound peers from 18:10:49 UTC** (`--out-peers 4`, `ref-a` included):
+  - Why: a remote node that collects more than 10 fail points against an IP blocks it for 2 minutes (`P2P_IP_FAILS_BEFORE_BLOCK`, `P2P_IP_BLOCKTIME`). The block closes every connection from that address, so a block caused by the slow node would also cut `ref-a`'s links. The cap limits that exposure and the competition for peers.
+  - The restart took 9 s; the height was unchanged.
+- **Guarding the reference node (measured baseline, `info` and `connections`, 00:00–18:00):**
+  - `ref-a` held 10–12 outbound peers in every 10-minute window from 15:00 to 18:00, both before and after the switch.
+  - It had 34–97 distinct outbound internet connections per hour, typically 46–56.
+  - `op-g6950-hdd` goes back to a single peer if `ref-a` falls below 8 outbound peers for a sustained period, or goes above 100 distinct outbound connections in an hour.
+- **Data from before 17:56 on 2026-10-06 is from the single-peer setup.** 17:56–18:10 had up to 12 peers; from 18:10, up to 4. Compare churn and drops across these boundaries.
+- **The load stopped at the same moment (measured, `block_timing`):**
+  - Blocks were full (10.41 MB) up to 3,103,860 (17:51:11). Block 3,103,861 (17:54:47) was partial at 2.53 MB, as `ref-a`'s pool emptied.
+  - Every block from 3,103,862 (17:57:30) on is coinbase-only, and `ref-a`'s pool held 0 transactions at 19:26.
+  - **So the multi-peer setup has not yet run under load.** Its churn and drop numbers can't be compared with the single-peer period until the transaction flow resumes.
+- **Idle-network baseline with up to 4 peers (measured, `info`/`connections`, 18:10–19:25):**
+  - `op-g6950-hdd` held 4 outbound peers throughout 19:00–19:25.
+  - It saw 14 distinct outbound internet connections in those 25 min, using 3 internet slots. In the same window `ref-a` saw 31 across 12 slots.
+  - `ref-a` stayed at 11–12 outbound peers, with 41 distinct outbound connections in 18:00–19:00, within its baseline.
+  - **19:00–20:00, network still idle:**
+    - `op-g6950-hdd` saw **34** distinct outbound internet connections on 3 slots, about 11 per slot.
+    - `ref-a` saw 55 on 12 slots, about 4.6 per slot.
+    - So the low-end node replaces its internet peers more than twice as often, even with no transaction load. Which side closes those connections isn't logged at the default level.
+- **First light load under the 4-peer setup (measured, `block_timing`, 2026-10-07 00:07–00:20 UTC):**
+  - Blocks 3,104,042–3,104,049 carried 0.18–0.85 MB of transactions. Before and after were empty blocks, and both pools were at 0 by 00:26.
+  - `op-g6950-hdd` had every block's transactions in its pool already (`t3` = 0). It took 0.25–0.72 s per block, against 0.06–0.20 s on `ref-a`.
+  - That is far below the ~10 tx/s flow that caused the drops, so it says nothing yet about them.
+
+## 2026-10-07
+
+### New controlled node: `exp-2c2g`, a "cheap VPS" virtual machine (from 10:46 UTC)
+
+- **Purpose:** measure one fixed small-hardware profile under the same load as the other nodes, and later vary it (CPU features, disk speed, RAM, vCPUs) one thing at a time.
+- **Shape (setup):**
+  - A KVM virtual machine with **2 vCPU pinned to the two hyperthreads of one physical core** of a Xeon E3-1240 v3 (Haswell, 3.4 GHz, AES-NI/AVX2 exposed). That's the shape of a low-end VPS.
+  - **2 GB RAM**, no swap.
+  - A virtio disk on a SATA SSD (thin qcow2).
+  - Debian 12 minimal.
+  - The same `monerod` binary as the other operator nodes (v0.19.0.0-beta.3.0, sha256 `03df3f8a…`), pruned, with the same log flags.
+  - Unlike the LAN nodes, it has its **own public address on the stressnet**, with inbound P2P open. That makes it the first operator node with a normal inbound+outbound peer set.
+  - The host's other workloads (non-stressnet daemons) are kept off its core.
+- **Initial sync from the network started at 10:46 UTC (measured, in progress):** block 17,500 of 3,104,428 after ~4 min, both vCPUs busy, 299 MB of RAM used, 2 inbound and 5 outbound peers. How long a 2 vCPU / 2 GB machine takes to join is itself a result; it goes here when the sync finishes.
+- **Known confounder:** a non-stressnet testnet daemon (`v0.18`, same network ID) shares this node's public IP. Remote nodes allow one inbound connection per IP, and an IP block from fail points applies to both, so some of this node's connection churn may come from its neighbour.
+
 ---
 
 ## Monitor notes
