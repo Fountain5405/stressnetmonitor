@@ -293,7 +293,78 @@ The aim is to test whether the drops above also happen with a normal peer set, r
   - Unlike the LAN nodes, it has its **own public address on the stressnet**, with inbound P2P open. That makes it the first operator node with a normal inbound+outbound peer set.
   - The host's other workloads (non-stressnet daemons) are kept off its core.
 - **Initial sync from the network started at 10:46 UTC (measured, in progress):** block 17,500 of 3,104,428 after ~4 min, both vCPUs busy, 299 MB of RAM used, 2 inbound and 5 outbound peers. How long a 2 vCPU / 2 GB machine takes to join is itself a result; it goes here when the sync finishes.
+- **The sync slowed about 20× at ~18:36 UTC, around block 1,912,800 (measured):**
+  - **Before:** it averaged ~250,000 blocks/h up to 18:29 (block 1,907,514; chain length from `get_info`). Most of those blocks were small, ~10 kB each.
+  - **After:** blocks average 100–200 kB each (the `cumm` weight in the log's `p/t` lines). The node now syncs 70–160 blocks/min, about 5,000/h. It took 780–1,100 blocks per 10 min from 18:40 to 19:30.
+  - **What a block costs:**
+    - Heavy blocks take ~0.3–1.1 s each to process.
+    - Most of that time is one stage of the `p/t` breakdown (the 8th field, e.g. 832 of 1,036 ms).
+    - Both vCPUs run at ~100% user time and the disk sits nearly idle, so the node is CPU-bound, not I/O-bound.
+  - **RPC under that load:**
+    - `get_info` took 10–21 s (5 samples at 19:30).
+    - That's past the sidecar's 10 s RPC timeout, so the hub shows the node as `UNRESPONSIVE` even though it is alive and syncing.
+    - Data: the `info.rpc_response_time` and `rpc_error` tables.
+  - **Memory:** monerod's resident memory is 1.6 GB. 857 MB is still available (most of it page cache); there's no swap and no OOM.
+  - **The heavy stretch ended at ~20:10 UTC, around block 1,923,000 (measured):**
+    - It lasted ~10,000 blocks over ~1.5 h.
+    - Blocks went back to 3–7 kB on average, and the node did 13,000–20,000 blocks per 10 min.
+    - `get_info` answered in 3.4 s at 20:30, and the hub shows `SYNCING` again.
+  - **Hypothesis:** the heavy chain near the tip, where the stressnet load ran, will slow it the same way. The finishing time will tell.
+- **It lost all its peers at once at 2026-10-08 01:27:28 UTC, around block 2,807,600, and then began blocking hosts (measured):**
+  - Within 0.03 s, the log printed "monerod is now disconnected from the network" four times.
+  - From 01:28:48 the node blocked 9 remote hosts in 3 minutes. Each block lasts 2 minutes.
+  - Peer count went from 38 in / 12 out (00:29) down to 3–9 in / 3–4 out.
+  - The sync kept going at ~4,500 empty blocks/min, so it isn't stuck.
+  - There were no warnings or errors before the drop.
+  - The log level (`0`) doesn't record why a host is penalised, so the cause is unknown.
+  - Data: peer counts are in the `info` table; the drop and blocks are in the node's own log.
+  - **An hour later (02:29):**
+    - It kept blocking hosts at ~115/h: 49 in 01:28–01:55 and 65 in 01:55–02:28.
+    - There was no second total disconnect.
+    - Peers recovered to 16 in / 8 out.
+    - The node reached block 3,038,215 (synced to ~67,000 below the tip).
+- **It reached the stressnet's heavy chain at ~02:45 UTC on 2026-10-08, around block 3,100,661 (measured):**
+  - **Speed:** past the FCMP++ fork height (3,102,800) blocks are 0.8–3.6 MB. Each takes 1.3–5.5 s to process, and the node manages ~10 blocks/min.
+  - **Where the time goes:** the dominant `p/t` stage is now the 5th field (e.g. 5,287 of 5,544 ms). On the pre-fork heavy patches it was the 8th field.
+  - **Memory:** at 03:30, monerod's heap (`AnonPages`) was 1.54 GB of 1.98 GB. Page cache was squeezed to ~290 MB, leaving 262 MB available, with no swap. There's no OOM kill yet.
+  - **RPC:** `get_info` took 6.8 s.
+  - **Position at 03:29:** block 3,103,362, 1,660 blocks behind the tip.
+  - **Hypothesis:** if the rest of the chain looks like this, it needs another ~3 h to reach the tip, and memory is the likely limit for a 2 GB machine.
+  - **At 04:29 (measured):**
+    - It's on the full ~10 MB blocks of the stressnet's peak load (block weight 10,197,687).
+    - Each takes 15–16 s, almost all in the 5th `p/t` stage (e.g. 15,924 of 16,402 ms), so ~4 blocks/min.
+    - It gained only 392 blocks in the hour and is at block 3,103,754.
+    - Memory has eased to 334 MB available (heap 1.47 GB). There's no OOM and no restart.
+    - Reading: 15–16 s per full block is ~13% of the 120 s block time. Keeping up at the tip should be feasible on this shape, but catching up is slow: ~4 full blocks/min.
+  - **Hypothesis:** load stopped at block 3,103,861, so ~105 full blocks remain (about 30 min), followed by empty blocks to the tip.
+- **Result: the initial sync from the network took 18 h 15 min (measured).**
+  - It started 2026-10-07 10:46:19 UTC.
+  - At 2026-10-08 05:00:53 UTC monerod logged "You are now synchronized", with the tip near block 3,105,060. That's on a 2 vCPU (one core), 2 GB RAM, SATA SSD VM with no restarts and no OOM.
+  - **Rough split of the time:**
+    - ~14 h for blocks 0–3,100,600, mostly empty or light, at 170–270k blocks/h;
+    - ~1.5 h for the pre-fork heavy patch near block 1.91M;
+    - ~2.3 h for the ~2,400 stressnet blocks before the tip. Of those, the full ~10 MB blocks took 15–16 s each.
+  - **Peak memory:** ~262 MB available out of 1.98 GB (03:30). The 2 GB of RAM was the tightest resource; CPU was the slowest one.
+  - **Once synced:** a 1.5 MB block at the tip took 348 ms (its transactions were already checked in the pool). `get_info` answers in 4 ms. Memory stays at ~330 MB available.
+  - Data: the `info` table (height, `synchronized`) and the node's log (`p/t` lines).
+- **Hypothesis:** while far behind, it scores peers' replies as failures and blocks them, possibly because the reported chain tops differ (peers reported tops of 3,104,435 and 3,104,450 against a real tip near 3,104,950). Unconfirmed; it needs `net.p2p`/`net.cn` debug logging.
 - **Known confounder:** a non-stressnet testnet daemon (`v0.18`, same network ID) shares this node's public IP. Remote nodes allow one inbound connection per IP, and an IP block from fail points applies to both, so some of this node's connection churn may come from its neighbour.
+
+## 2026-10-08
+
+- **Full blocks came back at ~20:13 UTC (first since 2026-10-06 17:54), block 3,105,426 (measured).** Blocks weigh 9,941,896 bytes. Per block, processing took (`p/t` in the node's log):
+  - `ref-a`: ~12 s.
+  - `exp-2c2g` (2 vCPU / 1 core, 2 GB): ~72 s.
+  - `op-g6950-hdd` (Pentium / HDD): ~107 s, close to the 120 s block time. Its `get_info` stopped answering and the hub showed `UNRESPONSIVE`.
+  - Data: the `block_timing` table and each node's log.
+- **`ref-a` lost outgoing peers while `op-g6950-hdd` ran with 4 peers under that load (measured):**
+  - Outgoing peers swung between 12 and 6 from 20:09, then fell to 2–4 by 20:32 (baseline 10–12). That hour it made 59 distinct outbound connections (baseline 34–97).
+  - It never did this in the single-peer period under full blocks, or in the idle hours since.
+  - **Action:** at ~20:33 UTC, `op-g6950-hdd` was reverted to the single-peer setup (`ref-a` as its only peer). That was a few minutes short of the written 10-minute limit, because the count was still falling.
+  - **Hour totals (20:00–21:00, `trigger.py`):** `ref-a` was under 8 outgoing peers in 18 of 119 polls (about 9 min) with a minimum of 2, and made 98 distinct outbound connections (limit 100). `op-g6950-hdd` took a median 82 s per block over 22 blocks.
+  - **After the revert,** `ref-a` was back to 10 outgoing peers by 20:40 and held 11–12 for the whole 21:00 hour with 32 outbound ids so far (measured).
+  - **Hypothesis, not proven:** the slow reader (`op-g6950-hdd`) with more peers draws failures and blocks on the shared public IP, which also cuts `ref-a`'s connections. The network-wide load could also have caused it; the recovery after the revert favours the first reading but is one observation.
+  - **Next:** a second round (4 peers, then 1) would separate the two.
 
 ---
 
@@ -303,6 +374,12 @@ These are about the monitor's behaviour, not the network's.
 
 - **False `BEHIND` (fixed 2026-10-06):** node heights come from 30 s RPC polls pushed every 30 s, while the canonical height is polled every 2 s. Right after a pair of quick blocks, healthy nodes looked 2 behind. The hub now compares each node with the canonical height at the moment the node took its sample.
 - **`UNRESPONSIVE` while busy:** when `get_info` takes more than 10 s because the node is verifying a block, the hub reports `UNRESPONSIVE`. That's a real symptom, slow RPC under load, but not a crash. The `info.rpc_response_time` and `rpc_error` tables show how slow it was.
+- **False `WRONG_CHAIN` while a node syncs (bug, seen 2026-10-08 03:29, fixed 10:47 UTC):**
+  - **What monerod returns:** while a node isn't synchronized, it answers `get_last_block_header` with `status: "BUSY"` and a header of zeros.
+  - **What the hub does:** it takes `major_version 0` above the fork height to mean an old-version chain, so it reports `WRONG_CHAIN`.
+  - **How it was ruled out:** `get_info`'s `top_block_hash` and height were consistent with the reference chain.
+  - **Fix:** the parser now turns any reply whose `status` isn't `OK` into an `rpc_error` row (`error` = `status BUSY`) and doesn't add it to `last_block_header`.
+  - **Effect on data:** Parquet written before the fix holds 3,069 zero-header rows (`major_version` 0): 1,808 from exp-2c2g, 688 from op-g6950-hdd and 573 from ref-a, all from their syncs. `msnm reparse` removes them. Until then, filter `major_version > 0`.
 - **Expected warnings that aren't faults:**
   - "Unable to send transaction(s), no available connections" on a node whose only peer is `ref-a`, because `monerod` doesn't relay a transaction back to its source;
   - "There were N blocks in the last 90 minutes…" when testnet's hashrate drops.
