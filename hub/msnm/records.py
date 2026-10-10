@@ -126,8 +126,9 @@ def _rpc_rows(p: Parsed, node: str, ts, method: str, code: int, secs: float, bod
             res = doc.get("result", doc)  # get_transaction_pool_stats is not JSON-RPC wrapped
             status = res.get("status")
             if status not in (None, "OK"):
+                # e.g. BUSY while syncing: the body is a template of zeros, not data
                 err = f"status {status}"
-            doc = res
+            doc = None if err else res
     if doc is None:
         p.add("rpc_error", {**base, "method": method, **rpc, "error": err or "unknown"})
         return

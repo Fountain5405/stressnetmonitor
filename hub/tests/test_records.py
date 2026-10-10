@@ -107,3 +107,14 @@ def test_rpc_failures_become_rpc_error_rows():
     assert "denied" in errs["get_connections"]["error"]
     assert errs["get_bans"]["error"].startswith("bad json")
     assert "info" not in p.rows
+
+
+def test_busy_status_is_an_error_not_a_zero_header():
+    # A syncing monerod answers BUSY with a zeroed header; reading major_version 0
+    # from it made the hub report WRONG_CHAIN.
+    body = ('{"id":0,"jsonrpc":"2.0","result":{"block_header":{"height":0,"hash":"",'
+            '"major_version":0},"status":"BUSY","top_hash":""}}')
+    _, p = parse_batch("\n".join(["#MSNM1\tseq=1", f"R\t1.0\tget_last_block_header\t200\t0.5\t{body}"]),
+                       "n", ParserState())
+    assert "last_block_header" not in p.rows
+    assert p.rows["rpc_error"][0]["error"] == "status BUSY"
