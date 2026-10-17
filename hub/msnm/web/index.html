@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<meta name="description" content="{{description}}">
+<meta name="color-scheme" content="dark">
+<meta name="referrer" content="no-referrer">
+<link rel="icon" href="/static/favicon.svg?v={{v}}" type="image/svg+xml">
+<link rel="stylesheet" href="/static/uPlot.min.css?v={{v}}">
+<link rel="stylesheet" href="/static/app.css?v={{v}}">
+<script defer src="/static/uPlot.iife.min.js?v={{v}}"></script>
+<script defer src="/static/app.js?v={{v}}"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="live" id="live-dot" title="Live data"></span>
+    <div>
+      <h1>{{title}}</h1>
+      <p class="sub">{{subtitle}}</p>
+    </div>
+  </div>
+  <div class="status">
+    <span class="conn" id="conn">connecting…</span>
+    <span class="clock mono" id="clock">--:--:--</span><small>UTC</small>
+  </div>
+</header>
+
+<main>
+  <section class="hero" aria-label="Network">
+    <div class="tile big">
+      <div class="label">Chain tip</div>
+      <div class="value mono" id="k-height">—</div>
+      <div class="foot"><span class="badge" id="k-hf"></span> <span id="k-hash" class="mono dim"></span></div>
+    </div>
+    <div class="tile">
+      <div class="label" title="Time since the newest block was first seen by a reference node">Last block</div>
+      <div class="value mono" id="k-age">—</div>
+      <div class="foot" id="k-age-foot"></div>
+    </div>
+    <div class="tile">
+      <div class="label" title="Transactions confirmed in blocks over the last hour, per second">Throughput</div>
+      <div class="value mono" id="k-tps">—</div>
+      <div class="foot" id="k-tps-foot"></div>
+    </div>
+    <div class="tile">
+      <div class="label" title="Transactions waiting in the reference node's pool">Tx pool</div>
+      <div class="value mono" id="k-pool">—</div>
+      <div class="foot" id="k-pool-foot"></div>
+    </div>
+    <div class="tile">
+      <div class="label" title="Weight of the newest block, against the median that sets the penalty-free size (a block can be at most 2x the median)">Block weight</div>
+      <div class="value mono" id="k-weight">—</div>
+      <div class="meter"><i id="k-weight-bar"></i></div>
+      <div class="foot" id="k-weight-foot"></div>
+    </div>
+    <div class="tile">
+      <div class="label" title="Average time between the last 30 blocks (target 2:00)">Block time</div>
+      <div class="value mono" id="k-interval">—</div>
+      <div class="foot" id="k-interval-foot"></div>
+    </div>
+    <div class="tile">
+      <div class="label" title="Network hashrate estimated from difficulty / 120 s">Hashrate</div>
+      <div class="value mono" id="k-hash-rate">—</div>
+      <div class="foot" id="k-hash-foot"></div>
+    </div>
+    <div class="tile wide-sm">
+      <div class="label">Monitored nodes</div>
+      <div class="value mono" id="k-nodes">—</div>
+      <div class="foot" id="k-nodes-foot"></div>
+    </div>
+  </section>
+
+  <section aria-label="Recent blocks">
+    <h2>Recent blocks</h2>
+    <div class="blocks" id="blocks"></div>
+  </section>
+
+  <section aria-label="Network charts">
+    <h2>Network <small>last 24 hours · drag to zoom, double-click to reset</small></h2>
+    <div class="charts" id="charts-net"></div>
+  </section>
+
+  <section aria-label="Nodes">
+    <h2>Monitored nodes <small id="nodes-note">pseudonyms only · updated every 5 s</small></h2>
+    <div class="nodes" id="nodes"></div>
+  </section>
+
+  <section aria-label="Node charts">
+    <h2>How each node keeps up <small>last 24 hours · click a name in a legend to hide it</small></h2>
+    <div class="charts" id="charts-nodes"></div>
+  </section>
+
+  <section class="about" aria-label="About">
+    <h2>About</h2>
+    <div class="about-grid">
+      <div>
+        <p>This page is the live side of a monitor for the Monero <b>FCMP++ stressnet</b>, a public test network that is pushed with a heavy, sustained transaction load. The question it is built to answer: <b>what is the minimum hardware that can run a node through that load?</b></p>
+        <p>Each monitored node runs a small sidecar next to <code>monerod</code> that reports its RPC, block timing and host load to a hub. Reference nodes define the network tip; every other node is measured against them.</p>
+      </div>
+      <div>
+        <dl class="defs">
+          <dt>Verify</dt><dd>time the node took to check and add the latest block (<code>--show-time-stats</code>)</dd>
+          <dt>Delay</dt><dd>how long after a reference first saw a block this node accepted it</dd>
+          <dt>Lag</dt><dd>blocks behind the network tip</dd>
+          <dt>Pool</dt><dd>transactions in the node's pool; a node that can't keep up holds fewer</dd>
+          <dt>Tiers</dt><dd><b>operator</b>: run by the monitor's operators · <b>volunteer</b>: run by community members · <b>ref</b>: reference node</dd>
+        </dl>
+      </div>
+    </div>
+    <p class="links" id="links"></p>
+  </section>
+</main>
+
+<footer>
+  <span>Data refreshes every 5 s; charts every minute. Times in UTC. Node names are pseudonyms.</span>
+  <span id="gen" class="mono dim"></span>
+</footer>
+</body>
+</html>

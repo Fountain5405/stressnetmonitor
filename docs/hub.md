@@ -25,6 +25,15 @@ Or install `deploy/msnm-hub.service`. The hub listens on:
 |---|---|---|
 | `127.0.0.1:8790` | `/v1/ping`, `/v1/ingest`, `/v1/bundle` | the internet, **only** via HAProxy + TLS (`deploy/haproxy.cfg.example`) |
 | `127.0.0.1:8791` | `/metrics`, `/healthz` | Prometheus (`deploy/prometheus.yml`) |
+| `127.0.0.1:8792` | `/`, `/static/`, `/api/live.json`, `/api/history.json` (with `dashboard.enabled`) | the internet, **only** via HAProxy + TLS; read-only |
+
+## Public dashboard
+
+With `dashboard.enabled: true`, the hub serves a read-only page with the live state of the network and of every node, and 24 h of charts: block weight and transactions, throughput, and per node the block verify time, block arrival delay, lag, pool size, CPU and memory. The page polls `/api/live.json` every 5 s and `/api/history.json` every minute. The hub builds them from memory, at most every 2 s and 30 s. At startup it loads the last 24 h from Parquet (about 2 s).
+
+What it publishes is an allow-list (`msnm/dashboard.py`): node pseudonyms, tier, position, a hardware summary (CPU model, cores, RAM, disk type and size), chain and performance numbers, and the per-node `notes` from the config. Registry notes, monerod arguments, data paths, peer addresses and log text are never published. `dashboard.hide` leaves a node out entirely. Volunteers' nodes appear under their pseudonyms, so tell volunteers before you turn it on.
+
+To publish it, forward 127.0.0.1:8792 through the tunnel and route `/`, `/static/` and `/api/` to it in HAProxy. Both examples in `deploy/` do this, with a response cache and a per-IP rate limit. The page loads nothing from third parties: uPlot 1.6.32 (MIT) is vendored in `msnm/web/vendor/`, and the page's Content-Security-Policy allows only its own origin.
 
 ## Adding nodes
 

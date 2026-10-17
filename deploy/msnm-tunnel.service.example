@@ -1,6 +1,7 @@
 # Reverse SSH tunnel from the hub machine to the public server, so HAProxy
-# there reaches the hub at 127.0.0.1:8790. Nothing on the hub's network needs
-# to accept inbound connections.
+# there reaches the hub's ingest at 127.0.0.1:8790 and, if enabled, its public
+# dashboard at 127.0.0.1:8792. Nothing on the hub's network needs to accept
+# inbound connections.
 #
 # Install as a systemd *user* unit on the hub machine (with lingering enabled:
 # `loginctl enable-linger <user>`):
@@ -8,13 +9,14 @@
 #   systemctl --user enable --now msnm-tunnel
 #
 # On the public server, create a `tunnel` user with shell /usr/sbin/nologin
-# and restrict its key to this one forward, in ~tunnel/.ssh/authorized_keys:
-#   restrict,port-forwarding,permitlisten="127.0.0.1:8790",command="/usr/sbin/nologin" ssh-ed25519 AAAA... msnm-hub-tunnel
+# and restrict its key to these forwards, in ~tunnel/.ssh/authorized_keys:
+#   restrict,port-forwarding,permitlisten="127.0.0.1:8790",permitlisten="127.0.0.1:8792",command="/usr/sbin/nologin" ssh-ed25519 AAAA... msnm-hub-tunnel
+# (Without the dashboard, drop the 8792 permitlisten and -R line.)
 # Pin the server's host key in ~/.ssh/known_hosts_msnm (check its fingerprint
 # against the server's console output, not just the first connection).
 
 [Unit]
-Description=Reverse SSH tunnel: public ingest server 127.0.0.1:8790 -> local msnm hub
+Description=Reverse SSH tunnel: public server 127.0.0.1:8790 (ingest) and :8792 (dashboard) -> local msnm hub
 After=network-online.target msnm-hub.service
 
 [Service]
@@ -25,6 +27,7 @@ ExecStart=/usr/bin/ssh -N -T \
   -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
   -R 127.0.0.1:8790:127.0.0.1:8790 \
+  -R 127.0.0.1:8792:127.0.0.1:8792 \
   tunnel@ingest.example.org
 Restart=always
 RestartSec=10

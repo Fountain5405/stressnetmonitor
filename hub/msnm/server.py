@@ -1,9 +1,11 @@
 """The hub service: sidecar ingest API, reference polling, ZMQ, states, metrics.
 
-Two listeners:
-  ingest  (cfg.ingest_host:ingest_port)  /v1/ping /v1/ingest /v1/bundle
-          Put this behind HAProxy/TLS; it is the only thing exposed publicly.
-  metrics (cfg.metrics_host:metrics_port) /metrics /healthz, for Prometheus.
+Listeners:
+  ingest    (cfg.ingest_host:ingest_port)  /v1/ping /v1/ingest /v1/bundle
+            Public only through HAProxy/TLS.
+  metrics   (cfg.metrics_host:metrics_port) /metrics /healthz, for Prometheus. Private.
+  dashboard (cfg.dashboard.host:port, when enabled) / /static/ /api/, the
+            read-only public page (dashboard.py). Public only through HAProxy/TLS.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from prometheus_client.exposition import CONTENT_TYPE_LATEST
 from . import zmqsub
 from .chain import Chain
 from .config import Config
+from .dashboard import Dashboard, History, load_history
 from .live import Monitor
 from .rawstore import RawStore
 from .records import BatchError, ParserState, parse_batch, parse_header
@@ -63,6 +66,13 @@ class Hub:
         self.rate: dict[str, deque] = defaultdict(lambda: deque(maxlen=cfg.max_batches_per_min))
         self.metrics_registry = CollectorRegistry()
         self.metrics_registry.register(self.monitor)
+        self.history: History | None = None
+        self.dashboard: Dashboard | None = None
+        if cfg.dashboard.enabled:
+            self.history = History()
+            self.dashboard = Dashboard(cfg.dashboard, self.monitor, self.chain, self.history, self.registry,
+                                       [r.id for r in cfg.references])
+        self.started = time.time()
         self._tasks: list[asyncio.Task] = []
 
     # --------------------------------------------------------------- auth ---
@@ -140,6 +150,12 @@ class Hub:
         if parsed.bad_lines:
             log.warning("node %s batch %d: %d unparseable lines", node.node_id, hdr.seq, parsed.bad_lines)
         self.monitor.ingest(node, hdr, parsed, recv, sent, len(body))
+        if self.history is not None:
+            try:
+                self.history.record(node.node_id, parsed.rows, self.monitor.nodes[node.node_id].clock_offset,
+                                    self.chain.tip()[0])
+            except Exception:  # noqa: BLE001 - the public page must never break ingest
+                log.exception("dashboard: recording a batch from %s failed", node.node_id)
         cmds = self.monitor.take_commands(node.node_id)
         return web.Response(text="".join(c + "\n" for c in cmds))
 
@@ -186,6 +202,23 @@ class Hub:
                                             "note": n.note, "created": n.created, "revoked": n.revoked,
                                             "snapshot_time": now})
 
+    def _on_zmq_tx(self, node_id: str, n: int) -> None:
+        self.monitor.on_zmq_tx(node_id, n)
+        if self.history is not None:
+            self.history.on_zmq_tx(node_id, n, time.time())
+
+    async def _load_history(self) -> None:
+        """Fill the dashboard's 24 h of chart data from Parquet (rows written
+        before this run; newer ones reach History live)."""
+        t0 = time.time()
+        try:
+            old = await asyncio.to_thread(load_history, os.path.join(self.cfg.data_dir, "parquet"), self.started)
+        except Exception:  # noqa: BLE001 - the dashboard then starts with live data only
+            log.exception("dashboard: loading history from Parquet failed")
+            return
+        self.history.merge(old)
+        log.info("dashboard: loaded history from Parquet in %.1fs", time.time() - t0)
+
     async def _flush_loop(self) -> None:
         last_snapshot = 0.0
         while True:
@@ -213,6 +246,17 @@ class Hub:
         await web.TCPSite(r2, self.cfg.metrics_host, self.cfg.metrics_port).start()
         log.info("ingest on %s:%d, metrics on %s:%d", self.cfg.ingest_host, self.cfg.ingest_port,
                  self.cfg.metrics_host, self.cfg.metrics_port)
+        r3 = None
+        if self.dashboard is not None:
+            r3 = web.AppRunner(self.dashboard.app(), access_log=None)
+            await r3.setup()
+            try:
+                await web.TCPSite(r3, self.cfg.dashboard.host, self.cfg.dashboard.port).start()
+            except OSError:  # the hub's own work goes on without the page
+                log.exception("dashboard: cannot listen on %s:%d", self.cfg.dashboard.host, self.cfg.dashboard.port)
+            else:
+                log.info("dashboard on %s:%d", self.cfg.dashboard.host, self.cfg.dashboard.port)
+                self._tasks.append(asyncio.create_task(self._load_history(), name="dashboard-history"))
 
         self._tasks.append(asyncio.create_task(self.chain.run(), name="chain"))
         self._tasks.append(asyncio.create_task(self._evaluate_loop(), name="evaluate"))
@@ -223,10 +267,10 @@ class Hub:
                     self.chain.note_block(ref_id, h, bh, t)
                     self.monitor.on_zmq_block(node_id, h, bh, t)
                 self._tasks.append(asyncio.create_task(
-                    zmqsub.subscribe(ref.id, ref.zmq, self.sink, on_ref_block, self.monitor.on_zmq_tx)))
+                    zmqsub.subscribe(ref.id, ref.zmq, self.sink, on_ref_block, self._on_zmq_tx)))
         for zn in self.cfg.zmq_nodes:
             self._tasks.append(asyncio.create_task(
-                zmqsub.subscribe(zn.id, zn.zmq, self.sink, self.monitor.on_zmq_block, self.monitor.on_zmq_tx)))
+                zmqsub.subscribe(zn.id, zn.zmq, self.sink, self.monitor.on_zmq_block, self._on_zmq_tx)))
         self.sink.add("hub_event", {"time": time.time(), "source": "hub", "event": "start", "detail": ""})
         self._snapshot_registry()
 
@@ -243,3 +287,5 @@ class Hub:
         await asyncio.to_thread(self.sink.flush)
         await r1.cleanup()
         await r2.cleanup()
+        if r3 is not None:
+            await r3.cleanup()

@@ -1,7 +1,11 @@
-# HAProxy on the public server: terminates TLS and forwards only the sidecar
-# API to the hub. The hub is reached over a private link: an SSH reverse
-# tunnel run from the hub machine (see msnm-tunnel.service.example), which
-# makes the hub appear at 127.0.0.1:8790 here, or WireGuard.
+# HAProxy on the public server: terminates TLS and forwards the sidecar API
+# and, if enabled, the read-only public dashboard to the hub. The hub is
+# reached over a private link: an SSH reverse tunnel run from the hub machine
+# (see msnm-tunnel.service.example), which makes the hub's ingest appear at
+# 127.0.0.1:8790 here and its dashboard at 127.0.0.1:8792, or WireGuard.
+#
+# Without the dashboard, drop the `cache` section, the `dash` lines and the
+# msnm_dash backend: then only /v1/ is public.
 #
 # The certificate file is the private key + full chain in one PEM. With lego
 # (see lego-renew.service.example) that is certificates/<name>.pem, copied
@@ -27,11 +31,21 @@ defaults
     timeout server 70s
     timeout http-request 15s
 
-# Port 80 only answers ACME HTTP-01 challenges (lego listens on 127.0.0.1:8402
-# while renewing).
+# Dashboard responses are cached here for their max-age (live data 2 s,
+# history 30 s), so the hub sees about one request per object however many
+# people watch.
+cache dashboard
+    total-max-size 64
+    max-object-size 2097152
+    max-age 60
+    process-vary on
+
+# Port 80 answers ACME HTTP-01 challenges (lego listens on 127.0.0.1:8402
+# while renewing) and sends dashboard visitors to HTTPS.
 frontend http_in
     bind :80
     acl acme path_beg /.well-known/acme-challenge/
+    http-request redirect scheme https code 301 if !acme { hdr(host),field(1,:) -i dashboard.example.org }
     http-request deny deny_status 404 unless acme
     default_backend acme
 
@@ -39,21 +53,39 @@ backend acme
     server lego 127.0.0.1:8402
 
 frontend msnm_public
-    bind :443 ssl crt /etc/haproxy/certs/ingest.pem alpn h2,http/1.1
-    # Only the sidecar API is public.
+    # The first certificate is the default (clients that connect by IP); a
+    # dashboard on its own domain gets its certificate by SNI.
+    bind :443 ssl crt /etc/haproxy/certs/ingest.pem crt /etc/haproxy/certs/dashboard.pem alpn h2,http/1.1
+    # The sidecar API, and the read-only dashboard: page, static files, JSON.
     acl api path_beg /v1/
-    http-request deny deny_status 404 unless api
-    # Per-source-IP rate limit, in addition to the hub's per-token limit.
+    acl dash path /
+    acl dash path_beg /static/ /api/
+    acl read method GET HEAD
+    # Per-source-IP rate limits, in addition to the hub's per-token limit.
+    # A dashboard viewer makes ~13 requests a minute.
     stick-table type ip size 100k expire 10m store http_req_rate(1m)
     http-request track-sc0 src
-    http-request deny deny_status 429 if { sc_http_req_rate(0) gt 120 }
+    http-request deny deny_status 429 if api { sc_http_req_rate(0) gt 120 }
+    http-request deny deny_status 429 if { sc_http_req_rate(0) gt 600 }
+    http-request deny deny_status 404 unless api || dash
+    http-request deny deny_status 405 if dash !read
     # The hub trusts X-Forwarded-For from this proxy. `option forwardfor`
     # appends a header but keeps any the client sent, and the hub reads the
     # first one, so drop the client's or anyone could fake their address.
     http-request del-header X-Forwarded-For
     option forwardfor
+    use_backend msnm_dash if dash
     default_backend msnm_hub
 
 backend msnm_hub
     # 127.0.0.1:8790 with the SSH reverse tunnel; the WireGuard peer IP otherwise.
     server hub 127.0.0.1:8790 check inter 10s
+
+backend msnm_dash
+    http-request cache-use dashboard
+    http-response cache-store dashboard
+    http-response set-header Strict-Transport-Security "max-age=31536000"
+    # Optional: a page of your own for when the hub or tunnel is down. It is a
+    # whole HTTP response (status line, headers, blank line, HTML).
+    # errorfile 503 /etc/haproxy/errors/msnm-dash-503.http
+    server dash 127.0.0.1:8792 check inter 10s

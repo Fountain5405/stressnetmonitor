@@ -37,6 +37,22 @@ zmq_nodes: []
 #  - id: op-5600g
 #    zmq: tcp://192.0.2.20:28083
 
+# Public dashboard: a read-only page with the network's and each node's live
+# data and 24 h charts, served on host:port and published through HAProxy and
+# the tunnel (deploy/haproxy.cfg.example). Everything here is shown publicly.
+# It publishes an allow-list only: pseudonyms, tier, position, a hardware
+# summary, chain and performance numbers. Never registry notes, monerod
+# arguments, paths, peer addresses or log text.
+dashboard:
+  enabled: false
+  host: 127.0.0.1
+  port: 8792
+  title: "Monero stressnet monitor"
+  subtitle: ""
+  hide: []                       # node ids never shown
+  notes: {}                      # one public line per node, e.g. {op-5600g: "Office desktop on a SATA SSD"}
+  links: []                      # footer links, e.g. [{label: "Source code", url: "https://..."}]
+
 thresholds:
   silent_after_s: 120            # no pushes for this long: DOWN
   unresponsive_polls: 2          # consecutive failed get_info: UNRESPONSIVE
