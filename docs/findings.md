@@ -368,6 +368,33 @@ The aim is to test whether the drops above also happen with a normal peer set, r
 
 ---
 
+## 2026-10-15/16
+
+- **All four `vol-02` nodes went dark within 24 s of midnight UTC and came back without monerod (measured):**
+  - Last RPC-bearing batches: 23:59:33–23:59:57 UTC on 2026-10-15, all fully normal (6 RPC methods, HTTP 200) — a hard stop, not a degradation.
+  - The batch header's `boot_id` changed on every one of them, so all four hosts rebooted, together. They returned staggered between 04:05 and 10:35 UTC on 10-16.
+  - After the reboot each pushes heartbeat batches whose header has an empty `monerod_pid` and whose only rows are host samples: the sidecar service auto-starts, monerod does not. The hosts themselves are healthy (load ~0.01, ~7 GB RAM free on an 8 GB box).
+  - **Data hole:** no RPC, log or process data for `vol-02a..d` from 2026-10-15 23:59 UTC until their operators start monerod again.
+  - **Hypothesis (not confirmed):** provider- or operator-side maintenance reboot; monerod isn't enabled on boot on those boxes (`systemctl enable monerod` would fix it).
+  - Data: `raw/vol-02?/<date>/` batch headers and bodies; hub state transitions in the hub journal.
+  - Build note (measured, from the last good batches): `vol-02b` and `vol-02d` run `0.19.0.0-beta.3.0-b8433e284` — a git-commit build, not the `-release` binary every other node reports. Same beta tag; keep it in mind when comparing per-block timings across volunteers.
+
+- **New operator node `op-q6600-ssd` joined (2026-10-16 19:45 UTC, measured):**
+  - Hardware: Intel Core2 Quad Q6600 (4 cores / 4 threads, 2.4 GHz, 2007-era desktop), 3.8 GB RAM, consumer SSDs (root SSD nearly full; a 448 GB SSD holds the LMDB). Our oldest CPU by a wide margin and the first 4 GB-class RAM node between `exp-2c2g` (2 GB) and the rest.
+  - Setup: same stressnet binary as every node (v0.19.0.0-beta.3.0), pruned testnet, single peer (`ref-a`), initial sync from block 1 started 19:45 UTC. Sync duration to be recorded here as a result once it reaches the tip. (The sync was later restarted with a temporary 4-peer bootstrap — see the pruning finding below — and was paused on 2026-10-17 for a machine move at height 915,487; the recorded duration will note the pause.)
+  - During the sync its batches carry `rpc_error` rows with `status BUSY` instead of headers — expected behaviour (see monitor notes), not faults.
+  - **A pruned node cannot initial-sync from a single pruned peer (measured):** with `ref-a` (pruning seed 389, one stripe) as its only peer, `op-q6600-ssd` made zero progress from block 1 for 45+ minutes: the connection handshakes, `SYNCHRONIZATION started`, no data flows (0 B/s), and the connection drops on a regular ~24 s cycle. Reason: old block spans exist only on peers whose pruning stripe covers them, and one pruned peer covers at most 1/8 of the chain; near-tip blocks (within the ~55 k pruning horizon) are the only ones every pruned peer serves — which is why single-peer peering works fine *after* a node reaches the tip. The same failure appears in `op-g6950-hdd`'s log from 2026-10-06 (`Failed to request missing objects, dropping connection`) during its initial single-peer sync; it finished only once it had several internet peers. Practical rule: bootstrap a pruned node with multiple peers (or copy a synced LMDB), then drop to single-peer.
+  - **New reference node `ref-b` joined (2026-10-17 04:20 UTC):** the first UNPRUNED node in the fleet — 16-core / 32-thread Ryzen 9 5900XT, 31 GB RAM, chain on a two-SSD LVM stripe. Registered as the hub's second reference (the canonical chain follows the freshest reference by cumulative difficulty, so `ref-a` stays canonical while `ref-b` syncs). Purpose: a full-chain anchor on the LAN so future pruned nodes can bootstrap single-peer instead of using the 4-peer workaround. Sync duration to be recorded here. Topology from 2026-10-17 ~05:00 UTC (operator decision): `ref-b` is the LAN's only internet-facing stressnet node (outbound, 8 peers), and `op-q6600-ssd` syncs from `ref-b` and `ref-a` over the LAN only. Rationale: a full node is the only kind of peer that can serve a pruned node's whole initial sync, and one internet-facing node per shared public IP avoids competing with `ref-a` for remotes' one-connection-per-IP slots. Measured at the switch: of the 25 peers in `ref-a`'s white list, 10 were full nodes (pruning seed 0).
+
+
+## 2026-10-17
+
+- **`ref-b` full (unpruned) initial sync: ~5 h 31 min (measured):** monerod started with internet peers at 04:48:35 UTC from height ~35,000 (the staging period had only fetched the first blocks) and logged "You are now synchronized" at 10:19:20 UTC, chain height 3,111,589 (top block 3,111,588). Hardware: Ryzen 9 5900XT, 31 GB RAM, two-SATA-SSD stripe; database 17.4 GB unpruned (vs 13.75 GB on the pruned nodes). Since then it is OK in the hub, at the same height as `ref-a`. Data: `info`, hub `node_state`; monerod log on the node.
+- **`ref-b` accepts inbound internet connections (measured):** from 04:52:39 UTC, 4 minutes after start, it has had inbound peers from internet addresses; at 16:00 UTC 20 of its 22 inbound peers were internet peers (10 full nodes, 10 pruned). The inbound path is a static port forward to this node set up by the operator, which is intended: from ~16:30 UTC `ref-b` is the LAN's internet-facing node in both directions, with inbound capped at 32 peers (`--in-peers 32`). `ref-a` still shows only LAN inbound peers. Data: `connections` (`incoming`, `host`).
+- **`op-q6600-ssd` (Core2 Q6600) sync slows ~50x near block 1,905,000 (measured):** hourly progress was 105k–186k blocks/h from 04:00 to 11:59 UTC (heights 921,491 → 1,904,840), then 9.4k, 2.2k, 1.8k, 3.1k blocks/h in the next four hours. At 16:00 UTC, over 300 consecutive blocks: average 497 ms per block in `p/t` timing, 0.58 s wall-clock per block, monerod at ~215% CPU, ~0% I/O wait, 437 MB swap used of 3.8 GB RAM. So it is CPU-bound on block verification, not waiting on its LAN peers or the disk. monerod's own estimate is "16.9 hours left" for 1.19 M blocks; at the measured ~0.5 s per block it is ~7 days, before the stressnet's much heavier recent blocks. **Hypothesis:** the blocks from ~1.905 M on carry real transactions (ring-signature and range-proof verification) where the earlier ones were near-empty, and a 2007-era 4-core CPU verifies them at ~2 blocks/s. This is a minimum-spec data point: a Q6600-class CPU cannot initial-sync the stressnet chain in a practical time. The node is left to finish on its own so the full sync duration can be recorded. Data: `block_timing` (`total_ms`), `info` (`height`), monerod log `Height:` lines.
+
+---
+
 ## Monitor notes
 
 These are about the monitor's behaviour, not the network's.
