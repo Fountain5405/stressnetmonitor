@@ -233,6 +233,8 @@ h2 small { letter-spacing: 0; text-transform: none; font-size: 12px; }
 .about { color: #c3cdd6; }
 .about-grid { display: grid; gap: 8px 32px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
 .about p { margin: 0 0 10px; max-width: 70ch; }
+/* the long log-categories string breaks after its commas, or anywhere on a phone */
+.about code.logcats { overflow-wrap: anywhere; }
 .defs { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 5px 14px; font-size: 13px; }
 .defs dt { color: var(--accent); font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; padding-top: 1px; }
 .defs dd { margin: 0; color: var(--muted); }
