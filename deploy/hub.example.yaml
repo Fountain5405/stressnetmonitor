@@ -50,7 +50,8 @@ dashboard:
   title: "Monero stressnet monitor"
   subtitle: ""
   hide: []                       # node ids never shown
-  notes: {}                      # one public line per node, e.g. {op-5600g: "Office desktop on a SATA SSD"}
+  id_secret: ""                  # required when enabled: a random 16+ character string; keys the public node IDs
+  aliases: {}                    # node id -> public ID, e.g. to keep an ID when a node is re-registered
   links: []                      # footer links, e.g. [{label: "Source code", url: "https://..."}]
 
 thresholds:

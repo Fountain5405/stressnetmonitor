@@ -63,6 +63,18 @@
     if (v < 1000) return Math.round(v) + " ms";
     return (v / 1000).toFixed(v < 10000 ? 2 : 1) + " s";
   }
+  // finer than ms() below 10 ms, for RPC times (healthy nodes answer in ~1 ms)
+  function msFine(v) {
+    if (!ok(v)) return "—";
+    if (v < 1) return v.toFixed(2) + " ms";
+    if (v < 10) return v.toFixed(1) + " ms";
+    return ms(v);
+  }
+  function cacheSize(b) {
+    if (!ok(b)) return "";
+    const m = b / 2 ** 20;
+    return m >= 1 ? (Number.isInteger(m) ? m : m.toFixed(1)) + " MB" : Math.round(b / 1024) + " KB";
+  }
   function secs(v) {
     if (!ok(v)) return "—";
     const a = Math.abs(v);
@@ -242,8 +254,8 @@
 
   // ----------------------------------------------------------------- nodes
   const METRICS = [
-    ["height", "Height", "Top block of this node"],
-    ["lag", "Lag", "Blocks behind the network tip"],
+    ["height", "Height", "Top block of this node; below: blocks behind the network tip"],
+    ["rpc", "RPC", "How long the node takes to answer a get_info call, timed on the node itself (median of the last 15 min); below: the 95th percentile, and the share of calls with no answer within 10 s"],
     ["peers", "Peers", "P2P connections: outgoing ↑ / incoming ↓"],
     ["verify", "Verify", "Time to verify and add the latest block; below: median of the last 30 blocks"],
     ["delay", "Delay", "Seconds after a reference first saw the latest block until this node accepted it; below: median of the last 30"],
@@ -266,7 +278,9 @@
     head.append(name, c.pill);
     c.tags = h("div", "tags");
     c.hw = h("div", "hw");
-    c.note = h("div", "note");
+    c.gen = h("div", "gen");
+    c.isa = h("div", "isa");
+    c.disk = h("div", "disk");
     c.reason = h("div", "reason");
     const metrics = h("div", "metrics");
     for (const [key, label, tip] of METRICS) {
@@ -303,7 +317,7 @@
     c.ver = h("span");
     c.seen = h("span");
     foot.append(c.ver, c.seen);
-    c.root.append(head, c.tags, c.hw, c.note, c.reason, metrics, c.sync, c.spark, foot);
+    c.root.append(head, c.tags, c.hw, c.gen, c.isa, c.disk, c.reason, metrics, c.sync, c.spark, foot);
     return c;
   }
 
@@ -327,6 +341,36 @@
     return [parts.join(" · "), disks.join(" + ")];
   }
 
+  // generation · process · year · cache, and where the numbers come from
+  function genText(hw) {
+    if (!hw) return ["", ""];
+    const parts = [];
+    if (hw.codename && hw.gen) parts.push(hw.codename + " (" + hw.gen + ")");
+    else if (hw.gen || hw.codename) parts.push(hw.gen || hw.codename);
+    if (hw.process) parts.push(hw.process);
+    if (ok(hw.year)) parts.push(String(hw.year));
+    const cache = [["L2", hw.l2_bytes], ["L3", hw.l3_bytes]].filter((x) => ok(x[1])).map((x) => x[0] + " " + cacheSize(x[1]));
+    if (cache.length) parts.push(cache.join(" · ") + (hw.cache_src === "spec" && hw.vm ? " (host chip)" : ""));
+    let tip = "";
+    if (hw.virtual_cpu) tip = "A virtual CPU model: the hypervisor shows a feature set, not the host's real chip.";
+    else if (hw.gen) tip = "Generation, process and launch year are looked up from the CPU model name.";
+    if (cache.length) tip += (tip ? " " : "") + (hw.cache_src === "measured" ? "Cache sizes are as the node reports them (totals per chip)."
+      : "Cache sizes are the chip's specification" + (hw.vm ? "; this VM shares the host's chip." : "."));
+    return [parts.join(" · "), tip];
+  }
+
+  function renderIsa(box, isa) {
+    const sig = (isa || []).map((x) => x.n + (x.on ? "+" : "-")).join(",");
+    if (box._sig === sig) return;
+    box._sig = sig;
+    box.textContent = "";
+    for (const x of isa || []) {
+      const s = h("span", x.on ? null : "no", x.n);
+      s.title = (x.on ? "Has " : "No ") + x.n;
+      box.append(s);
+    }
+  }
+
   function updateCard(c, n, net) {
     const color = colorFor(n.id);
     c.root.className = "node s-" + n.state;
@@ -337,20 +381,34 @@
 
     c.tags.textContent = "";
     const tags = [];
+    const r = n.rpc;
     if (n.ref) tags.push(["ref", "reference"]);
-    tags.push(["", n.tier]);
-    tags.push(["", n.position === "lan" ? "operator LAN" : "remote"]);
     if (n.hw && n.hw.vm) tags.push(["", "VM"]);
+    if (r && r.slow) tags.push(["warn", "RPC slow"]);
     for (const [cls, text] of tags) c.tags.append(h("span", "tag " + cls, text));
 
     const [hw, disk] = hwText(n.hw);
     c.hw.textContent = hw;
-    if (disk) c.hw.append(h("div", "disk", disk));
-    c.note.textContent = n.note || "";
-    c.reason.textContent = n.state === "OK" ? "" : n.reason || "";
+    const [gen, genTip] = genText(n.hw);
+    c.gen.textContent = gen;
+    c.gen.title = genTip;
+    renderIsa(c.isa, n.hw && n.hw.isa);
+    c.disk.textContent = disk;
+    // the reason is from the state change (a syncing node's lag then); the sync bar is current
+    c.reason.textContent = n.state === "OK" || n.state === "SYNCING" ? "" : n.reason || "";
 
-    setMetric(c, "height", int(n.height), "");
-    setMetric(c, "lag", n.state === "DOWN" ? "—" : int(n.lag), n.lag > 0 ? "blocks" : "");
+    const lagTxt = n.state === "DOWN" || !ok(n.lag) ? "" : n.lag > 0 ? "lag " + int(n.lag) : "at tip";
+    setMetric(c, "height", int(n.height), lagTxt);
+    if (r) {
+      const over = (v) => (ok(v) && v >= r.limit_ms ? "> " + Math.round(r.limit_ms / 1000) + " s" : msFine(v));
+      // with calls timing out, their share says more than the 95th percentile (which is then "> 10 s")
+      setMetric(c, "rpc", over(r.p50_ms), r.timeouts ? pct(r.timeouts / r.n) + " no answer" : "p95 " + over(r.p95_ms));
+      c.sub.rpc.title = "95th percentile " + over(r.p95_ms) + "; " + r.timeouts + " of the last " + r.n +
+        " calls got no answer within " + Math.round(r.limit_ms / 1000) + " s";
+    } else {
+      setMetric(c, "rpc", "—", "");
+    }
+    c.m.rpc.classList.toggle("warn", !!(r && r.slow));
     setMetric(c, "peers", "↑" + (ok(n.peers_out) ? n.peers_out : "—") + " ↓" + (ok(n.peers_in) ? n.peers_in : "—"), "out / in");
     setMetric(c, "verify", ms(n.block_ms), ok(n.ms_med) ? "med " + ms(n.ms_med) : "");
     setMetric(c, "delay", secs(n.delay_s), ok(n.delay_med) ? "med " + secs(n.delay_med) : "");
@@ -439,7 +497,8 @@
     font: "11px " + MONO,
   };
   const xAxis = () => Object.assign({}, AXIS, { space: 70 });
-  const yAxis = (fmt, extra) => Object.assign({}, AXIS, { size: 62, values: (u, vals) => vals.map(fmt) }, extra || {});
+  // null: a tick uPlot leaves unlabelled (log scales label only some)
+  const yAxis = (fmt, extra) => Object.assign({}, AXIS, { size: 62, values: (u, vals) => vals.map((v) => (v == null ? "" : fmt(v))) }, extra || {});
   const timeSeries = { value: (u, v) => (v == null ? "—" : utc(v)) };
 
   function nodeSeries(order, fmt) {
@@ -455,6 +514,29 @@
 
   // per-node arrays aligned with a shared x
   const pick = (obj, order, key) => order.map((id) => ((obj && obj[id] && obj[id][key]) || []));
+
+  // a dashed horizontal line at `val` on the y scale, labelled
+  function limitLine(val, label) {
+    return (u) => {
+      const y = u.valToPos(val, "y", true);
+      if (!Number.isFinite(y) || y < u.bbox.top || y > u.bbox.top + u.bbox.height) return;
+      const ctx = u.ctx, px = uPlot.pxRatio;
+      ctx.save();
+      ctx.strokeStyle = "rgba(255, 77, 109, 0.6)";
+      ctx.lineWidth = px;
+      ctx.setLineDash([5 * px, 4 * px]);
+      ctx.beginPath();
+      ctx.moveTo(u.bbox.left, y);
+      ctx.lineTo(u.bbox.left + u.bbox.width, y);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255, 77, 109, 0.85)";
+      ctx.font = 10 * px + "px " + MONO;
+      ctx.textAlign = "right";
+      ctx.fillText(label, u.bbox.left + u.bbox.width - 6 * px, y - 5 * px);
+      ctx.restore();
+    };
+  }
+  const rpcLabel = (v) => (v == null ? "—" : hist && v >= hist.rpc_limit_ms ? "no answer" : msFine(v));
 
   function rollingTps(b, k) {
     const out = new Array(b.t.length).fill(null);
@@ -516,6 +598,18 @@
       }),
     },
     {
+      box: "charts-nodes", key: "rpc", title: "RPC response time",
+      desc: "How long each node took to answer get_info: the slowest call in each minute (log scale). Calls with no answer within 10 s sit on the dashed line.",
+      nodes: true,
+      data: (H) => [H.minutes.t, ...pick(H.minutes.nodes, H.order, "rpc").map((a) => a.map((v) => (v == null ? null : Math.max(v, 0.05))))],
+      hooks: (H) => ({ draw: [limitLine(H.rpc_limit_ms || 10000, "no answer within " + Math.round((H.rpc_limit_ms || 10000) / 1000) + " s")] }),
+      opts: (H) => ({
+        scales: { y: { distr: 3, range: (u, lo, hi) => [Math.min(0.1, lo == null ? 0.1 : lo), Math.max(3 * (H.rpc_limit_ms || 10000), hi == null ? 1 : hi)] } },
+        series: [timeSeries, ...nodeSeries(H.order, rpcLabel)],
+        axes: [xAxis(), yAxis((v) => (v >= 1000 ? v / 1000 + " s" : v + " ms"), { size: 58 })],
+      }),
+    },
+    {
       box: "charts-nodes", key: "delay", title: "Block arrival delay",
       desc: "Seconds after a reference first saw each block until the node accepted it (axis capped at 10 min).",
       nodes: true,
@@ -523,7 +617,7 @@
       opts: (H) => ({
         scales: { y: { distr: 4, asinh: 0.1, range: (u, lo, hi) => [Math.max(lo == null ? 0 : lo, -10), Math.min(Math.max(hi == null ? 1 : hi, 1), 600)] } },
         series: [timeSeries, ...nodeSeries(H.order, secs).map((s) => Object.assign(s, { points: { show: true, size: 3, width: 1 } }))],
-        axes: [xAxis(), yAxis((v) => secs(v), { size: 58 })],
+        axes: [xAxis(), yAxis((v) => (Math.abs(v) >= 60 ? Math.round(v / 60) + " min" : secs(v)), { size: 58 })],
       }),
     },
     {
@@ -623,7 +717,7 @@
             tzDate: (ts) => uPlot.tzDate(new Date(ts * 1000), "Etc/UTC"),
             cursor: { sync: { key: "msnm", scales: ["x", null] }, points: { size: 6 } },
             legend: { live: true },
-            hooks: LEGEND_HOOKS,
+            hooks: Object.assign({}, LEGEND_HOOKS, spec.hooks ? spec.hooks(hist) : {}),
           }, spec.opts(hist));
           spec.u = new uPlot(opts, data, spec.plot);
           spec.sig = sig;

@@ -127,7 +127,7 @@ States are assigned continuously. Every threshold can be changed in config.
 | `BEHIND` | Lagging, but the lag is steady or shrinking |
 | `FALLING_BEHIND` | The lag is growing |
 | `STALLED` | Reachable, but the height hasn't changed for N intervals while the network moved on |
-| `UNRESPONSIVE` | Local RPC times out, but the process is alive |
+| `UNRESPONSIVE` | Local RPC hasn't answered for 5 minutes, but the process is alive |
 | `DOWN` | Process gone, or the sidecar stopped reporting |
 | `FORKED` | On a chain that is valid but not canonical |
 | `WRONG_CHAIN` | On testnet, or on an incompatible build (hash mismatch at `fork_height + 1`) |

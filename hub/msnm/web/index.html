@@ -84,7 +84,7 @@
   </section>
 
   <section aria-label="Nodes">
-    <h2>Monitored nodes <small id="nodes-note">pseudonyms only · updated every 5 s</small></h2>
+    <h2>Monitored nodes <small id="nodes-note">arbitrary IDs · updated every 5 s</small></h2>
     <div class="nodes" id="nodes"></div>
   </section>
 
@@ -99,14 +99,16 @@
       <div>
         <p>This page is the live side of a monitor for the Monero <b>FCMP++ stressnet</b>, a public test network that is pushed with a heavy, sustained transaction load. The question it is built to answer: <b>what is the minimum hardware that can run a node through that load?</b></p>
         <p>Each monitored node runs a small sidecar next to <code>monerod</code> that reports its RPC, block timing and host load to a hub. Reference nodes define the network tip; every other node is measured against them.</p>
+        <p>Nodes are listed under arbitrary IDs: who runs a node, and where, is not shown.</p>
       </div>
       <div>
         <dl class="defs">
           <dt>Verify</dt><dd>time the node took to check and add the latest block (<code>--show-time-stats</code>)</dd>
+          <dt>RPC</dt><dd>how long the node takes to answer a <code>get_info</code> call, timed on the node itself; wallets and services using a slow node wait this long</dd>
           <dt>Delay</dt><dd>how long after a reference first saw a block this node accepted it</dd>
           <dt>Lag</dt><dd>blocks behind the network tip</dd>
           <dt>Pool</dt><dd>transactions in the node's pool; a node that can't keep up holds fewer</dd>
-          <dt>Tiers</dt><dd><b>operator</b>: run by the monitor's operators · <b>volunteer</b>: run by community members · <b>ref</b>: reference node</dd>
+          <dt>CPU</dt><dd>generation, process and year are looked up from the model name; instruction sets come from the node (crossed out: missing)</dd>
         </dl>
       </div>
     </div>
@@ -115,7 +117,7 @@
 </main>
 
 <footer>
-  <span>Data refreshes every 5 s; charts every minute. Times in UTC. Node names are pseudonyms.</span>
+  <span>Data refreshes every 5 s; charts every minute. Times in UTC. Nodes are listed under arbitrary IDs.</span>
   <span id="gen" class="mono dim"></span>
 </footer>
 </body>

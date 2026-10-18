@@ -27,7 +27,8 @@ STATES = ("UNKNOWN", "OK", "BEHIND", "FALLING_BEHIND", "STALLED", "UNRESPONSIVE"
 @dataclass
 class Thresholds:
     silent_after_s: float = 120       # no pushes for this long: DOWN
-    unresponsive_polls: int = 2       # consecutive failed get_info: UNRESPONSIVE
+    unresponsive_polls: int = 2       # consecutive failed get_info before any answer: UNRESPONSIVE
+    unresponsive_s: float = 300       # no get_info answer for this long: UNRESPONSIVE
     behind_blocks: int = 2            # lag at or above this: BEHIND
     falling_slope_per_h: float = 2.0  # lag growth (blocks/hour) for FALLING_BEHIND
     slope_window_s: float = 1800
@@ -268,12 +269,16 @@ class Monitor:
             return "DOWN", f"no data for {int(now - nl.last_batch)}s", None
         if nl.monerod_exit_at > nl.monerod_alive_at:
             return "DOWN", "monerod not running", None
-        if nl.info_fail_streak >= th.unresponsive_polls:
+        if nl.info is None and nl.info_fail_streak >= th.unresponsive_polls:
             return "UNRESPONSIVE", f"get_info failed {nl.info_fail_streak}x", None
-        # info_time is on the node's clock; last_batch on the hub's.
+        # A node whose RPC misses some polls (an old CPU busy verifying blocks
+        # answers get_info in more than the sidecar's 10 s about half the time)
+        # keeps its state from the last answer; only no answer at all for
+        # unresponsive_s is UNRESPONSIVE. The dashboard shows the response
+        # times. info_time is on the node's clock; last_batch on the hub's.
         rpc_age = nl.last_batch + (nl.clock_offset or 0.0) - nl.info_time
-        if nl.info is not None and rpc_age > th.silent_after_s:
-            return "UNRESPONSIVE", f"no RPC data for {int(rpc_age)}s", None
+        if nl.info is not None and rpc_age >= th.unresponsive_s:
+            return "UNRESPONSIVE", f"no get_info answer for {int(rpc_age)}s", None
         if nl.info is None or nl.info.get("height") is None:
             return "UNKNOWN", "no get_info yet", None
         h = int(nl.info["height"]) - 1

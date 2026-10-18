@@ -29,9 +29,9 @@ Or install `deploy/msnm-hub.service`. The hub listens on:
 
 ## Public dashboard
 
-With `dashboard.enabled: true`, the hub serves a read-only page with the live state of the network and of every node, and 24 h of charts: block weight and transactions, throughput, and per node the block verify time, block arrival delay, lag, pool size, CPU and memory. The page polls `/api/live.json` every 5 s and `/api/history.json` every minute. The hub builds them from memory, at most every 2 s and 30 s. At startup it loads the last 24 h from Parquet (about 2 s).
+With `dashboard.enabled: true`, the hub serves a read-only page with the live state of the network and of every node, and 24 h of charts: block weight and transactions, throughput, and per node the block verify time, RPC response time, block arrival delay, lag, pool size, CPU and memory. The page polls `/api/live.json` every 5 s and `/api/history.json` every minute. The hub builds them from memory, at most every 2 s and 30 s. At startup it loads the last 24 h from Parquet (about 2 s).
 
-What it publishes is an allow-list (`msnm/dashboard.py`): node pseudonyms, tier, position, a hardware summary (CPU model, cores, RAM, disk type and size), chain and performance numbers, and the per-node `notes` from the config. Registry notes, monerod arguments, data paths, peer addresses and log text are never published. `dashboard.hide` leaves a node out entirely. Volunteers' nodes appear under their pseudonyms, so tell volunteers before you turn it on.
+What it publishes is an allow-list (`msnm/dashboard.py`): an arbitrary public ID per node, whether it is a reference, a hardware summary (CPU model, cores, RAM, disk type and size, instruction sets, and the generation, process, launch year and cache that `msnm/cpudb.py` looks up from the CPU model), chain and performance numbers, and `get_info` response times. Node ids, tier, position, registry notes, monerod arguments, data paths, peer addresses and log text are never published. A public ID is an HMAC of the node id keyed with `dashboard.id_secret`, which is required: keep it private (with it, IDs map back to nodes) and don't change it (every ID would change). `dashboard.aliases` pins a public ID to a node id, for example to keep one when a node is re-registered. `dashboard.hide` leaves a node out entirely. Volunteers' nodes appear with their hardware, so tell volunteers before you turn it on.
 
 To publish it, forward 127.0.0.1:8792 through the tunnel and route `/`, `/static/` and `/api/` to it in HAProxy. Both examples in `deploy/` do this, with a response cache and a per-IP rate limit. The page loads nothing from third parties: uPlot 1.6.32 (MIT) is vendored in `msnm/web/vendor/`, and the page's Content-Security-Policy allows only its own origin.
 
@@ -85,7 +85,7 @@ Evaluated every 5 s; transitions are written to `node_state`. Thresholds are set
 | State | Rule |
 |---|---|
 | `DOWN` | no upload for `silent_after_s`, or `monerod` exited |
-| `UNRESPONSIVE` | `get_info` failed `unresponsive_polls` times in a row, or no RPC data for `silent_after_s` |
+| `UNRESPONSIVE` | no `get_info` answer for `unresponsive_s` (300 s), or `unresponsive_polls` failures in a row before the first answer. A node that misses some polls but answers in between keeps its state; the dashboard shows its response times |
 | `WRONG_CHAIN` | past `fork_height` with top block `major_version < min_major_version` |
 | `FORKED` | tip hash differs from the canonical hash at that height for `fork_confirm_s` |
 | `SYNCING` | `busy_syncing` and lag > `syncing_lag` |

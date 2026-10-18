@@ -19,7 +19,7 @@
 set -u
 export LC_ALL=C   # EPOCHREALTIME and numbers must use '.' as decimal point
 
-SIDECAR_VERSION="0.1.4"
+SIDECAR_VERSION="0.1.5"
 
 # ----------------------------------------------------------------- config ---
 
@@ -360,9 +360,36 @@ emit_profile() {
   rec P "$t" cpu_physical_cores "${#cores[@]}"
   [[ $flags == *" hypervisor "* ]] && hyper=yes
   rec P "$t" virtualized "$hyper"
-  local fl sel=""
-  for fl in aes avx avx2 avx512f sha_ni bmi2 adx asimd sha2 pmull; do [[ $flags == *" $fl "* ]] && sel+="$fl,"; done
+  local fl sel="" flag_list="ssse3 sse4_1 sse4_2 aes avx avx2 avx512f sha_ni bmi2 adx asimd sha2 pmull"
+  for fl in $flag_list; do [[ $flags == *" $fl "* ]] && sel+="$fl,"; done
   rec P "$t" cpu_flags "${sel%,}"
+  rec P "$t" cpu_flags_checked "${flag_list// /,}"
+  local cdir clvl ctyp csz cshr ckind cout=""
+  local -A csize=() cseen=() ccount=()
+  for cdir in /sys/devices/system/cpu/cpu[0-9]*/cache/index[0-9]*; do
+    [[ -r $cdir/level && -r $cdir/type && -r $cdir/size && -r $cdir/shared_cpu_list ]] || continue
+    read -r clvl < "$cdir/level" || continue
+    read -r ctyp < "$cdir/type" || continue
+    read -r csz < "$cdir/size" || continue
+    read -r cshr < "$cdir/shared_cpu_list" || continue
+    case "$clvl:$ctyp" in
+      1:Data) ckind=l1d ;;
+      1:Instruction) ckind=l1i ;;
+      2:*) ckind=l2 ;;
+      3:*) ckind=l3 ;;
+      *) continue ;;
+    esac
+    csize[$ckind]=$csz
+    if [[ -z ${cseen["$ckind|$cshr"]:-} ]]; then
+      cseen["$ckind|$cshr"]=1
+      ccount[$ckind]=$(( ${ccount[$ckind]:-0} + 1 ))
+    fi
+  done
+  for ckind in l1d l1i l2 l3; do
+    [[ -n ${csize[$ckind]:-} ]] || continue
+    case $ckind in l1d) cout+="l1d=${csize[l1d]} l1dn=${ccount[l1d]} " ;; l1i) cout+="l1i=${csize[l1i]} l1in=${ccount[l1i]} " ;; *) cout+="$ckind=${csize[$ckind]} ${ckind}n=${ccount[$ckind]} " ;; esac
+  done
+  [[ -n $cout ]] && rec P "$t" cpu_cache "${cout% }"
   if [[ -r /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq ]]; then
     read -r v < /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq; rec P "$t" cpu_max_khz "$v"
   fi

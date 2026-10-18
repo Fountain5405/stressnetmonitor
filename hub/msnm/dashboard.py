@@ -8,11 +8,14 @@ through HAProxy like the ingest API (see deploy/haproxy.cfg.example):
   /api/live.json       network, recent blocks, one entry per node
   /api/history.json    24 h of per-block and per-minute series for the charts
 
-Everything published comes from an allow-list: node pseudonyms, tier and
-position, a hardware summary, chain and performance numbers. Registry notes,
-monerod arguments, data paths, peer addresses and log text never leave the hub
-here. Strings that come from nodes (CPU and disk models, monerod version) are
-cleaned and shortened, and the page renders all data as text.
+Everything published comes from an allow-list: an arbitrary public ID per
+node (a keyed hash of the node id, see public_id), whether it is a reference,
+a hardware summary (with what msnm/cpudb.py looks up from the CPU model),
+chain, performance and RPC response-time numbers. Node ids, tier, position,
+registry notes, monerod arguments, data paths, peer addresses and log text
+never leave the hub here. Strings that come from nodes (CPU and disk models,
+monerod version) are cleaned and shortened, and the page renders all data as
+text.
 
 Chart history lives in memory (History). At startup it is filled from the
 Parquet tables in a worker thread, then merged on the event loop, so only the
@@ -25,6 +28,7 @@ import bisect
 import datetime as dt
 import gzip
 import hashlib
+import hmac
 import html
 import json
 import logging
@@ -33,7 +37,7 @@ import os
 import re
 import statistics
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 
 import pyarrow as pa
@@ -41,6 +45,7 @@ import pyarrow.compute as pc
 import pyarrow.dataset as ds
 from aiohttp import web
 
+from . import cpudb
 from .chain import Chain
 from .live import Monitor, NodeLive, _ts
 from .registry import Registry
@@ -51,7 +56,12 @@ WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
 WINDOW_S = 24 * 3600     # chart history
 BLOCK_KEEP = 1000        # per-block series: blocks within this many of the tip
 TARGET_S = 120           # block target; hashrate = difficulty / 120 s
-TIER_ORDER = {"operator": 0, "trusted": 1, "volunteer": 2}
+RPC_TIMEOUT_S = 10.0     # the sidecar's RPC_TIMEOUT: a call with no answer by then is a timeout
+RPC_SLOW_S = 1.0         # 95th percentile get_info time above this (or any timeout): "RPC slow"
+RPC_SPAN_S = 900         # window of the live RPC numbers
+RPC_KEEP = 240           # get_info samples kept per node (2 h at one poll per 30 s)
+ID_ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ"   # no 0/O, 1/I/L, U
+_ID_RE = re.compile(r"[A-Za-z0-9-]{2,16}")
 
 STATIC = {  # published name -> (file under web/, content type)
     "app.js": ("app.js", "text/javascript; charset=utf-8"),
@@ -83,13 +93,31 @@ class DashboardConfig:
     description: str = ("Live view of a Monero stressnet: the chain, the transaction load, and how "
                         "each monitored node's hardware keeps up.")
     hide: list[str] = field(default_factory=list)        # node ids never published
-    notes: dict[str, str] = field(default_factory=dict)  # one public line per node
+    id_secret: str = ""                                  # key of the public IDs; keep it stable and private
+    aliases: dict[str, str] = field(default_factory=dict)  # node id -> public ID, overriding the hash
     links: list[dict] = field(default_factory=list)      # footer links: [{label, url}]
 
     def __post_init__(self):
         for link in self.links:
             if not isinstance(link, dict) or not str(link.get("url", "")).startswith(("https://", "http://")):
                 raise ValueError(f"dashboard.links entries need an http(s) url: {link!r}")
+        if self.enabled and len(self.id_secret) < 16:
+            raise ValueError("dashboard.id_secret: set a random string of 16+ characters. It keys the public "
+                             "node IDs: changing it changes every ID, and anyone who has it can map IDs to nodes.")
+        for nid, pid in self.aliases.items():
+            if not _ID_RE.fullmatch(str(pid)):
+                raise ValueError(f"dashboard.aliases[{nid!r}]: 2-16 letters, digits or '-'")
+
+
+def public_id(secret: str, node_id: str, n: int = 4) -> str:
+    """A node's public ID: n characters of an HMAC of its node id. Stable for
+    a given secret, and without the secret not traceable to the node id."""
+    v = int.from_bytes(hmac.new(secret.encode(), node_id.encode(), hashlib.sha256).digest()[:8], "big")
+    out = []
+    for _ in range(n):
+        v, r = divmod(v, len(ID_ALPHABET))
+        out.append(ID_ALPHABET[r])
+    return "".join(out)
 
 
 # ------------------------------------------------------------------ helpers ---
@@ -147,9 +175,18 @@ def hardware(profile: dict) -> dict:
             kind = "HDD" if kv.get("rotational") == "1" else "SSD"
         sectors = _int(kv.get("sectors"))
         disks.append({"kind": kind, "model": clean(model, 40), "bytes": sectors * 512 if sectors else None})
-    cpu = re.sub(r"\((R|TM|tm)\)", "", str(profile.get("cpu_model") or ""))
+    model = str(profile.get("cpu_model") or "")
+    cpu = re.sub(r"\((R|TM|tm)\)", "", model)
     cpu = re.sub(r"\b(CPU|Processor)\b", "", cpu)
     mem, swap, khz = (_int(profile.get(k)) for k in ("mem_total_kb", "swap_total_kb", "cpu_max_khz"))
+    spec = cpudb.lookup(model)
+    # Cache: what the node reports, except in a VM (the hypervisor makes it up),
+    # else the chip's spec for exact models.
+    cache = {} if vm else cpudb.parse_cache(profile.get("cpu_cache"))
+    cache_src = "measured" if cache else None
+    if not cache and spec and not spec.virtual:
+        cache = {k: kb * 1024 for k, kb in (("l2", spec.l2_kb), ("l3", spec.l3_kb)) if kb}
+        cache_src = "spec" if cache else None
     return {
         "cpu": clean(cpu, 60),
         "cores": _int(profile.get("cpu_physical_cores")),
@@ -159,25 +196,46 @@ def hardware(profile: dict) -> dict:
         "swap_bytes": swap * 1024 if swap is not None else None,
         "vm": vm,
         "disks": disks,
+        "arch": clean(profile.get("arch"), 16),
+        "gen": clean(spec.gen, 48) if spec else "",
+        "codename": clean(spec.codename, 32) if spec and spec.codename else "",
+        "process": clean(spec.process, 16) if spec and spec.process else "",
+        "year": spec.year if spec else None,
+        "virtual_cpu": bool(spec and spec.virtual),
+        "l2_bytes": cache.get("l2"),
+        "l3_bytes": cache.get("l3"),
+        "cache_src": cache_src,
+        "isa": (cpudb.isa(profile.get("arch"), profile["cpu_flags"], profile.get("cpu_flags_checked"))
+                if "cpu_flags" in profile else []),
     }
 
 
 # ------------------------------------------------------------------ history ---
 
 _CPU = ("cpu_user", "cpu_nice", "cpu_system", "cpu_idle", "cpu_iowait", "cpu_irq", "cpu_softirq", "cpu_steal")
-H, POOL, CPU_SUM, CPU_N, MEM, HT = range(6)   # fields of a per-minute bucket; HT: when H was sampled
+# fields of a per-minute bucket; HT: when H was sampled; RPC: slowest get_info
+# (seconds, a timeout counts as RPC_TIMEOUT_S); RPC_TO: get_info timeouts
+H, POOL, CPU_SUM, CPU_N, MEM, HT, RPC, RPC_TO = range(8)
+
+
+def _new_bucket() -> list:
+    return [None, None, 0.0, 0, None, None, None, 0]
+
+
+_EMPTY = tuple(_new_bucket())
 
 
 class History:
     """Chart data for the last 24 h.
 
     Per node: per-minute buckets (latest top height and when it was sampled,
-    pool size, CPU busy, memory in use), and for blocks near the tip each
-    block's processing time and when the node accepted it. Node times are
-    moved onto the hub's clock with the node's clock offset. Per ZMQ source:
-    transactions entering the pool per minute. `seen` holds block first-seen
-    times from before this hub run, and `profiles` each node's last profile
-    (sidecars send it only now and then).
+    pool size, CPU busy, memory in use, slowest get_info), the recent get_info
+    response times, and for blocks near the tip each block's processing time
+    and when the node accepted it. Node times are moved onto the hub's clock
+    with the node's clock offset. Per ZMQ source: transactions entering the
+    pool per minute. `seen` holds block first-seen times from before this hub
+    run, and `profiles` each node's last profile (sidecars send it only now
+    and then).
     """
 
     def __init__(self, window_s: float = WINDOW_S):
@@ -185,6 +243,7 @@ class History:
         self.minutes: dict[str, dict[int, list]] = defaultdict(dict)
         self.block_ms: dict[str, dict[int, float]] = defaultdict(dict)
         self.accepted: dict[str, dict[int, tuple[str | None, float]]] = defaultdict(dict)
+        self.rpc: dict[str, deque] = defaultdict(lambda: deque(maxlen=RPC_KEEP))  # (t, seconds, timed out)
         self.tx_in: dict[str, dict[int, int]] = defaultdict(dict)
         self.seen: dict[tuple[int, str], float] = {}
         self.profiles: dict[str, dict] = {}
@@ -195,6 +254,10 @@ class History:
     def record(self, node_id: str, rows: dict, offset: float | None, tip: int | None) -> None:
         for r in rows.get("info", []):
             self._info(node_id, r, offset or 0.0)
+            self._rpc(node_id, r, offset or 0.0, answered=True)
+        for r in rows.get("rpc_error", []):
+            if r.get("method") == "get_info":
+                self._rpc(node_id, r, offset or 0.0, answered=False)
         for r in rows.get("host_sample", []):
             self._host(node_id, r)
         if tip is None:
@@ -213,8 +276,46 @@ class History:
         m = int(t // 60)
         b = self.minutes[node_id].get(m)
         if b is None:
-            b = self.minutes[node_id][m] = [None, None, 0.0, 0, None, None]
+            b = self.minutes[node_id][m] = _new_bucket()
         return b
+
+    def _rpc(self, node_id: str, r: dict, offset: float, answered: bool) -> None:
+        """One get_info call: an `info` row (answered) or an `rpc_error` row.
+        An error with an HTTP status still answered; one with none either
+        timed out (it took the sidecar's whole limit) or was refused, which
+        says the node is down, not slow, and is left out."""
+        secs, t = r.get("rpc_response_time"), r.get("time")
+        if secs is None or t is None:
+            return
+        timed_out = False
+        if not answered and not r.get("rpc_http_code"):
+            if secs < RPC_TIMEOUT_S * 0.95:
+                return
+            timed_out, secs = True, RPC_TIMEOUT_S
+        t = _ts(t) - offset
+        b = self._bucket(node_id, t)
+        b[RPC] = secs if b[RPC] is None else max(b[RPC], secs)
+        b[RPC_TO] += timed_out
+        self.rpc[node_id].append((t, float(secs), timed_out))
+
+    def rpc_stats(self, node_id: str, now: float, span_s: float = RPC_SPAN_S) -> dict | None:
+        """get_info response time over the last span_s: median and 95th
+        percentile with timeouts counted as slower than everything (so a node
+        that often doesn't answer can't look fast), and the timeout count."""
+        xs = [(s, to) for t, s, to in self.rpc.get(node_id, ()) if t >= now - span_s]
+        if len(xs) < 4:
+            return None
+        vals = sorted(math.inf if to else s for s, to in xs)
+
+        def q(p: float) -> float:
+            v = vals[max(0, math.ceil(p * len(vals)) - 1)]
+            return RPC_TIMEOUT_S if v == math.inf else v
+
+        timeouts = sum(1 for _, to in xs if to)
+        p95 = q(0.95)
+        return {"n": len(xs), "p50_ms": _num(q(0.5) * 1000, 2), "p95_ms": _num(p95 * 1000, 2),
+                "timeouts": timeouts, "limit_ms": _num(RPC_TIMEOUT_S * 1000),
+                "slow": p95 > RPC_SLOW_S or timeouts > 0}
 
     def _info(self, node_id: str, r: dict, offset: float) -> None:
         if r.get("height") is None or r.get("time") is None:
@@ -266,11 +367,15 @@ class History:
                     continue
                 if ob[HT] is not None and (b[HT] is None or ob[HT] > b[HT]):
                     b[H], b[HT] = ob[H], ob[HT]
-                for i in (POOL, MEM):
+                for i in (POOL, MEM, RPC):
                     if ob[i] is not None:
                         b[i] = ob[i] if b[i] is None else max(b[i], ob[i])
                 b[CPU_SUM] += ob[CPU_SUM]
                 b[CPU_N] += ob[CPU_N]
+                b[RPC_TO] += ob[RPC_TO]
+        for node, q in old.rpc.items():
+            merged = sorted([*q, *self.rpc.get(node, ())])
+            self.rpc[node] = deque(merged[-RPC_KEEP:], maxlen=RPC_KEEP)
         for mine_all, old_all in ((self.block_ms, old.block_ms), (self.accepted, old.accepted)):
             for node, d in old_all.items():
                 mine = mine_all[node]
@@ -379,9 +484,20 @@ def load_history(parquet_root: str, until: float, window_s: float = WINDOW_S) ->
                 by_node[r["node_id"]].append(r["clock_offset_s"])
         offsets = {n: max(v[-20:]) for n, v in by_node.items()}   # as NodeLive.clock_offset
 
-    t = _parquet_rows(parquet_root, "info", ["node_id", "time", "height", "tx_pool_size"], lo, hi)
-    for r in _rows(t):
-        hist._info(r["node_id"], r, offsets.get(r["node_id"], 0.0))
+    hist.rpc = defaultdict(deque)   # unbounded while answers and errors are added one table after the other
+    t = _parquet_rows(parquet_root, "info", ["node_id", "time", "height", "tx_pool_size", "rpc_response_time"],
+                      lo, hi)
+    if t is not None and t.num_rows:
+        for r in _rows(t.sort_by([("node_id", "ascending"), ("time", "ascending")])):
+            hist._info(r["node_id"], r, offsets.get(r["node_id"], 0.0))
+            hist._rpc(r["node_id"], r, offsets.get(r["node_id"], 0.0), answered=True)
+    t = _parquet_rows(parquet_root, "rpc_error", ["node_id", "time", "rpc_http_code", "rpc_response_time"], lo, hi,
+                      extra=pc.field("method") == "get_info")
+    if t is not None and t.num_rows:
+        for r in _rows(t.sort_by([("node_id", "ascending"), ("time", "ascending")])):
+            hist._rpc(r["node_id"], r, offsets.get(r["node_id"], 0.0), answered=False)
+    hist.rpc = defaultdict(lambda: deque(maxlen=RPC_KEEP),
+                           {n: deque(sorted(q)[-RPC_KEEP:], maxlen=RPC_KEEP) for n, q in hist.rpc.items()})
 
     t = _parquet_rows(parquet_root, "host_sample", ["node_id", "time", "mem_total_kb", "mem_avail_kb", *_CPU],
                       lo, hi)
@@ -423,6 +539,7 @@ class Dashboard:
         self.registry = registry
         self.references = list(references)
         self._cache: dict[str, tuple[float, bytes, bytes]] = {}
+        self._id_cache: tuple[tuple, dict[str, str]] = ((), {})
         self._static = self._load_static()
 
     # ------------------------------------------------------------- static ---
@@ -489,13 +606,29 @@ class Dashboard:
 
     # ------------------------------------------------------------- shared ---
 
+    def _ids(self) -> dict[str, str]:
+        """node id -> public ID: the configured alias, else public_id(); where
+        two hashes collide, both get a longer one."""
+        nids = tuple(sorted({n.node_id for n in self.registry.all()} | set(self.monitor.nodes)))
+        if self._id_cache[0] != nids:
+            ids = {nid: self.cfg.aliases.get(nid) or public_id(self.cfg.id_secret, nid) for nid in nids}
+            dup = {pid for pid, k in Counter(ids.values()).items() if k > 1}
+            for nid in nids:
+                if ids[nid] in dup and nid not in self.cfg.aliases:
+                    ids[nid] = public_id(self.cfg.id_secret, nid, 8)
+            self._id_cache = (nids, ids)
+        return self._id_cache[1]
+
+    def public(self, node_id: str) -> str:
+        return self._ids()[node_id]
+
     def _visible(self) -> list[NodeLive]:
         hide = set(self.cfg.hide)
         revoked = {n.node_id for n in self.registry.all() if n.revoked is not None}
         nodes = [nl for nl in self.monitor.nodes.values()
                  if nl.node.node_id not in hide and nl.node.node_id not in revoked]
-        return sorted(nodes, key=lambda nl: (nl.node.node_id not in self.references,
-                                             TIER_ORDER.get(nl.node.tier, 9), nl.node.node_id))
+        ids = self._ids()
+        return sorted(nodes, key=lambda nl: (nl.node.node_id not in self.references, ids[nl.node.node_id]))
 
     def _blocks(self) -> list[dict]:
         """The canonical reference's recent headers, oldest first. `t` is when a
@@ -557,7 +690,6 @@ class Dashboard:
             tx_in = sum(src.get(m, 0) for m in range(m_now - 10, m_now)) / 10
         difficulty = tip.get("difficulty")
         network = {
-            "ref": ref_id,
             "height": tip.get("h"),
             "hash": tip.get("hash"),
             "major_version": tip.get("mv"),
@@ -602,12 +734,10 @@ class Dashboard:
         lag = nl.lag_hist[-1][1] if nl.lag_hist else None
         ms_hist = self.history.block_ms.get(nid, {})
         return {
-            "id": nid,
-            "tier": nl.node.tier,
-            "position": nl.node.position,
+            "id": self.public(nid),
             "ref": nid in self.references,
-            "note": clean(self.cfg.notes.get(nid, ""), 160),
             "hw": hardware({**self.history.profiles.get(nid, {}), **nl.profile}),
+            "rpc": self.history.rpc_stats(nid, now),
             "version": clean(info.get("version"), 40),
             "state": nl.state,
             "reason": clean(nl.reason, 120),
@@ -661,12 +791,13 @@ class Dashboard:
         all_blocks = self._blocks()
         blocks = [b for b in all_blocks if b["t"] >= now - hist.window_s]
         order = [nl.node.node_id for nl in self._visible()]
+        ids = self._ids()
 
         per_block = {}
         for nid in order:
             ms = hist.block_ms.get(nid, {})
-            per_block[nid] = {"ms": [_num(ms.get(b["h"]), 1) for b in blocks],
-                              "delay": [_num(self._delay(nid, b), 3) for b in blocks]}
+            per_block[ids[nid]] = {"ms": [_num(ms.get(b["h"]), 1) for b in blocks],
+                                   "delay": [_num(self._delay(nid, b), 3) for b in blocks]}
 
         # per minute; lag against the canonical height when the node sampled
         # its height (as the node states do), so a block arriving later in the
@@ -682,15 +813,16 @@ class Dashboard:
         series = {}
         for nid in order:
             d = hist.minutes.get(nid, {})
-            s = {"lag": [], "pool": [], "cpu": [], "mem": []}
+            s = {"lag": [], "pool": [], "cpu": [], "mem": [], "rpc": []}
             for m in mins:
-                b = d.get(m) or [None, None, 0.0, 0, None, None]
+                b = d.get(m) or _EMPTY
                 ch = canon_at(b[HT]) if b[HT] is not None else None
                 s["lag"].append(max(0, ch - b[H]) if ch is not None else None)
                 s["pool"].append(b[POOL])
                 s["cpu"].append(_num(b[CPU_SUM] / b[CPU_N], 3) if b[CPU_N] else None)
                 s["mem"].append(_num(b[MEM], 3))
-            series[nid] = s
+                s["rpc"].append(_num(b[RPC] * 1000, 2) if b[RPC] is not None else None)   # ms
+            series[ids[nid]] = s
 
         src = hist.tx_in.get(ref_id or "") or max(hist.tx_in.values(), key=len, default={})
         first = min(src) if src else None
@@ -700,8 +832,8 @@ class Dashboard:
             "v": 1,
             "now": round(now, 3),
             "window_s": hist.window_s,
-            "ref": ref_id,
-            "order": order,
+            "rpc_limit_ms": _num(RPC_TIMEOUT_S * 1000),
+            "order": [ids[nid] for nid in order],
             "blocks": {
                 "t": [round(b["t"], 3) for b in blocks],
                 "h": [b["h"] for b in blocks],
