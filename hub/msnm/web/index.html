@@ -100,6 +100,7 @@
         <p>This page is the live side of a monitor for the Monero <b>FCMP++ stressnet</b>, a public test network that is pushed with a heavy, sustained transaction load. The question it is built to answer: <b>what is the minimum hardware that can run a node through that load?</b></p>
         <p>Each monitored node runs a small sidecar next to <code>monerod</code> that reports its RPC, block timing and host load to a hub. Reference nodes define the network tip; every other node is measured against them.</p>
         <p>Nodes are listed under arbitrary IDs: who runs a node, and where, is not shown.</p>
+        <p id="sidecar-note" hidden>Running a node? The newest sidecar is <b id="sidecar-latest" class="mono"></b>; nodes with an older one are tagged &ldquo;sidecar update&rdquo;. To upgrade, run <code>git pull</code> in your copy of the repo, then <code>sudo ./sidecar/install.sh</code> (your settings are kept). <code>msnm-sidecar --status</code> shows your node's ID on this page.</p>
       </div>
       <div>
         <dl class="defs">

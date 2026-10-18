@@ -169,6 +169,7 @@
     renderBlocks(live.blocks || [], live.network || {});
     renderNodes(live.nodes || []);
     renderLinks(live.links || []);
+    renderSidecar(live.sidecar_latest);
     $("gen").textContent = "data at " + utc(live.now, true) + " UTC";
     tick();
   }
@@ -236,6 +237,11 @@
       box.append(c);
     });
     if (top != null) prevTop = top;
+  }
+
+  function renderSidecar(latest) {
+    $("sidecar-note").hidden = !latest;
+    $("sidecar-latest").textContent = latest || "";
   }
 
   function renderLinks(links) {
@@ -385,6 +391,7 @@
     if (n.ref) tags.push(["ref", "reference"]);
     if (n.hw && n.hw.vm) tags.push(["", "VM"]);
     if (r && r.slow) tags.push(["warn", "RPC slow"]);
+    if (n.sidecar_update) tags.push(["", "sidecar update"]);
     for (const [cls, text] of tags) c.tags.append(h("span", "tag " + cls, text));
 
     const [hw, disk] = hwText(n.hw);
@@ -433,7 +440,10 @@
     }
 
     drawSpark(c, n.id, color);
-    c.ver.textContent = [n.version ? "v" + n.version.replace(/^v/, "") : "", ok(n.uptime_s) ? "up " + dur(n.uptime_s) : ""].filter(Boolean).join(" · ");
+    // each part stays whole, so a narrow card wraps only between parts
+    c.ver.textContent = [n.version ? "v" + n.version.replace(/^v/, "").replace(/-release$/, "") : "",
+      ok(n.uptime_s) ? "up " + dur(n.uptime_s) : "", n.sidecar ? "sidecar " + n.sidecar : ""]
+      .filter(Boolean).map((x) => x.replace(/ /g, "\u00a0")).join(" · ");
     c.seen.textContent = ok(n.age_s) ? "report " + dur(n.age_s) + " ago" : "";
   }
 

@@ -13,10 +13,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import signal
 import time
 import zlib
 from collections import defaultdict, deque
+from pathlib import Path
 
 from aiohttp import web
 from prometheus_client import CollectorRegistry, generate_latest
@@ -34,13 +36,32 @@ from .tables import ParquetSink
 
 log = logging.getLogger(__name__)
 
+SIDECAR_SCRIPT = Path(__file__).resolve().parents[2] / "sidecar" / "msnm-sidecar.sh"
 
-def ping_text(node_id: str, nl, now: float) -> str:
+
+def sidecar_latest(path: Path = SIDECAR_SCRIPT) -> str | None:
+    """The sidecar version in this checkout. The hub tells sidecars it is the
+    newest, so push a sidecar change before restarting the hub: volunteers
+    upgrade with git pull."""
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return None
+    m = re.search(r'^SIDECAR_VERSION="(\d+(?:\.\d+)+)"', text, re.M)
+    return m.group(1) if m else None
+
+
+def ping_text(node_id: str, nl, now: float, latest: str | None = None, public_id: str | None = None) -> str:
     """/v1/ping body. The first line stays "pong NODE_ID" for older sidecars;
-    the key<TAB>value lines after it tell the operator that data is arriving."""
+    the key<TAB>value lines after it tell the operator that data is arriving,
+    which sidecar version is the newest, and the node's ID on the dashboard."""
     lines = [f"pong {node_id}"]
     if nl is not None and nl.last_batch:
         lines += [f"last_batch_age_s\t{max(0, int(now - nl.last_batch))}", f"state\t{nl.state}"]
+    if latest:
+        lines.append(f"sidecar_latest\t{latest}")
+    if public_id:
+        lines.append(f"public_id\t{public_id}")
     return "".join(line + "\n" for line in lines)
 
 
@@ -66,12 +87,13 @@ class Hub:
         self.rate: dict[str, deque] = defaultdict(lambda: deque(maxlen=cfg.max_batches_per_min))
         self.metrics_registry = CollectorRegistry()
         self.metrics_registry.register(self.monitor)
+        self.sidecar_latest = sidecar_latest()
         self.history: History | None = None
         self.dashboard: Dashboard | None = None
         if cfg.dashboard.enabled:
             self.history = History()
             self.dashboard = Dashboard(cfg.dashboard, self.monitor, self.chain, self.history, self.registry,
-                                       [r.id for r in cfg.references])
+                                       [r.id for r in cfg.references], self.sidecar_latest)
         self.started = time.time()
         self._tasks: list[asyncio.Task] = []
 
@@ -105,7 +127,10 @@ class Hub:
 
     async def ping(self, request: web.Request) -> web.Response:
         node = self._auth(request)
-        return web.Response(text=ping_text(node.node_id, self.monitor.nodes.get(node.node_id), time.time()))
+        nid = node.node_id
+        listed = self.dashboard is not None and nid not in self.dashboard.cfg.hide
+        return web.Response(text=ping_text(nid, self.monitor.nodes.get(nid), time.time(), self.sidecar_latest,
+                                           self.dashboard.public(nid) if listed else None))
 
     async def ingest(self, request: web.Request) -> web.Response:
         node = self._auth(request)
@@ -157,6 +182,8 @@ class Hub:
             except Exception:  # noqa: BLE001 - the public page must never break ingest
                 log.exception("dashboard: recording a batch from %s failed", node.node_id)
         cmds = self.monitor.take_commands(node.node_id)
+        if self.sidecar_latest:   # sidecars from 0.1.6 log "update available" when it is newer
+            cmds = [*cmds, f"sidecar_latest\t{self.sidecar_latest}"]
         return web.Response(text="".join(c + "\n" for c in cmds))
 
     async def bundle(self, request: web.Request) -> web.Response:

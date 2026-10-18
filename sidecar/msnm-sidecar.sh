@@ -19,7 +19,7 @@
 set -u
 export LC_ALL=C   # EPOCHREALTIME and numbers must use '.' as decimal point
 
-SIDECAR_VERSION="0.1.5"
+SIDECAR_VERSION="0.1.6"
 
 # ----------------------------------------------------------------- config ---
 
@@ -140,6 +140,7 @@ SEQ_FILE="$SPOOL_DIR/seq"
 # key<TAB>value lines about the push side, for --status and the installer.
 # Written at startup and after each push round that sent or failed something.
 STATUS_FILE="$SPOOL_DIR/status"
+UPDATE_NOTE="$SPOOL_DIR/update.notice"   # when "update available" was last logged
 
 SEQ=0
 if [[ -r $SEQ_FILE ]]; then read -r SEQ < "$SEQ_FILE" || SEQ=0; fi
@@ -157,6 +158,33 @@ BOOT_ID=""
 #   L <ts> <raw monerod log line>            selected log line
 rec() { local IFS=$'\t'; printf '%s\n' "$*" >> "$HOST_CUR"; }
 event() { now; rec E "$NOW" "$1" "${2:-}"; }
+
+# ver_newer A B: true when dotted version A is newer than B.
+ver_newer() {
+  [[ $1 =~ ^[0-9]+(\.[0-9]+)*$ && $2 =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 1
+  local a=$1. b=$2. x y
+  while [[ -n $a || -n $b ]]; do
+    x=${a%%.*} y=${b%%.*}; a=${a#*.} b=${b#*.}
+    x=$((10#${x:-0})) y=$((10#${y:-0}))
+    ((x == y)) || { ((x > y)); return; }
+  done
+  return 1
+}
+
+# The hub names the newest sidecar in its ping and push replies. When it is
+# newer than this one, say so in the log: at start ($2 set), else once a day.
+update_notice() {
+  local last=0
+  ver_newer "$1" "$SIDECAR_VERSION" || return 0
+  now
+  if [[ -z ${2:-} ]]; then
+    [[ -r $UPDATE_NOTE ]] && read -r last < "$UPDATE_NOTE"
+    [[ $last =~ ^[0-9]+$ ]] || last=0
+    (( ${NOW%.*} - last >= 86400 )) || return 0
+  fi
+  printf '%s\n' "${NOW%.*}" > "$UPDATE_NOTE"
+  say "update available: msnm-sidecar $1 is out (this is $SIDECAR_VERSION). To upgrade: git pull in your copy of the repo, then re-run ./sidecar/install.sh as you first did; your settings are kept"
+}
 
 # Scrub IPv4/IPv6 addresses and onion/i2p hosts from text sent off-host.
 SCRUB_SED='s/([0-9]{1,3}\.){3}[0-9]{1,3}/x.x.x.x/g; s/\[[0-9a-fA-F:]{2,}(%[a-z0-9]+)?\]/[ipv6]/g; s/[a-z2-7]{16,56}\.(onion|b32\.i2p)/x.\1/g'
@@ -762,10 +790,11 @@ push_outbox() {
 
 # The hub can ask for a log-tail bundle (e.g. when it sees this node stalled).
 handle_response() {
-  local line
+  local line val
   [[ -r $1 ]] || return 0
-  while IFS=$'\t' read -r line _; do
+  while IFS=$'\t' read -r line val _; do
     case $line in
+      sidecar_latest) update_notice "$val" ;;
       capture_logs)
         if ((ALLOW_REMOTE_CAPTURE)) && [[ -n $MPID ]]; then
           capture_bundle stall "$MPID" "$M_LOG" "$MONEROD_UNIT" &
@@ -836,7 +865,7 @@ utc() { date -u -d "@$1" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || echo "@$1"; }
 
 # --status: is the running sidecar getting data to the hub?
 status() {
-  local ok=1 t pid cmd q n kb line k v hub_age="" hub_state=""
+  local ok=1 t pid cmd q n kb line k v hub_age="" hub_state="" latest="" pubid=""
   printf -v t '%(%s)T' -1
   echo "msnm-sidecar $SIDECAR_VERSION status (spool $SPOOL_DIR)"
   if ! read_status; then
@@ -873,6 +902,8 @@ status() {
       case $k in
         last_batch_age_s) hub_age=$v ;;
         state) hub_state=$v ;;
+        sidecar_latest) latest=$v ;;
+        public_id) pubid=$v ;;
         pong*) line=${k#pong } ;;
       esac
     done < <(curl -sS --max-time 15 -H "Authorization: Bearer $TOKEN" "$HUB_URL/v1/ping" 2>/dev/null)
@@ -880,6 +911,14 @@ status() {
       echo "hub:       $HUB_URL knows this node as $line${hub_age:+; last batch received $(ago "$hub_age") ago}${hub_state:+, state $hub_state}"
     else
       ok=0; echo "hub:       $HUB_URL did not answer the ping with this token"
+    fi
+    [[ $pubid =~ ^[0-9A-Z]{4,8}$ ]] && echo "dashboard: this node is listed as $pubid"
+    if [[ $latest =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+      if ver_newer "$latest" "$SIDECAR_VERSION"; then
+        echo "version:   $latest is out (this is $SIDECAR_VERSION). To upgrade: git pull in your copy of the repo, then re-run ./sidecar/install.sh as you first did"
+      else
+        echo "version:   up to date"
+      fi
     fi
   fi
   ((ok)) && echo "OK: data is reaching the hub" || echo "NOT OK: see above"
@@ -920,7 +959,10 @@ if [[ -n $HUB_URL ]]; then
   ping_out=$(curl -sS --max-time 15 -w '\n%{http_code}' -H "Authorization: Bearer $TOKEN" "$HUB_URL/v1/ping" 2>/dev/null)
   case ${ping_out##*$'\n'} in
     200) ST_hub_node=${ping_out%%$'\n'*}; ST_hub_node=${ST_hub_node#pong }
-         say "hub $HUB_URL accepted the token; this node is ${ST_hub_node:-?}. The first batch goes out in $PUSH_INTERVAL s" ;;
+         say "hub $HUB_URL accepted the token; this node is ${ST_hub_node:-?}. The first batch goes out in $PUSH_INTERVAL s"
+         while IFS=$'\t' read -r k v; do
+           [[ $k == sidecar_latest ]] && update_notice "$v" start
+         done <<< "$ping_out" ;;
     401|403) say "hub $HUB_URL REJECTED the token; check TOKEN in $CONFIG" ;;
     *) say "can't reach the hub at $HUB_URL yet; batches are queued and retried every $PUSH_INTERVAL s" ;;
   esac

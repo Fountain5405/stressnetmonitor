@@ -43,7 +43,7 @@ It ends with `OK: data is reaching the hub` and exits 0, or `NOT OK` with the re
 
 **Without systemd or sudo:** run the installer as the user that runs `monerod`, with `--no-systemd`. See [Running without systemd](#running-without-systemd).
 
-**Upgrade:** `git pull && sudo ./sidecar/install.sh`. Your settings are kept.
+**Upgrade:** `git pull && sudo ./sidecar/install.sh`. Your settings are kept. From 0.1.6 the sidecar tells you when a newer version is out: its log says so when it starts and once a day, `msnm-sidecar --status` shows it, and the dashboard tags the node "sidecar update". `--status` also shows the ID your node has on the dashboard.
 **Remove:** `sudo ./sidecar/install.sh --uninstall`, then ask the operator to revoke your token.
 `./sidecar/install.sh --help` lists every option.
 

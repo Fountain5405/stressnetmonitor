@@ -312,3 +312,17 @@ def test_slow_rpc_keeps_state_until_no_answer_for_5_min(tmp_path):
     new.last_batch, new.info_fail_streak = time.time(), 2   # never answered at all
     mon.evaluate()
     assert (new.state, new.reason) == ("UNRESPONSIVE", "get_info failed 2x")
+
+
+def test_sidecar_versions(tmp_path):
+    from msnm.dashboard import sidecar_version, version_newer
+    assert sidecar_version(" 0.1.6 ") == "0.1.6" and sidecar_version("0.1.6<b>") is None and sidecar_version(None) is None
+    assert version_newer("0.1.10", "0.1.9") and not version_newer("0.1.5", "0.1.5") and not version_newer(None, "0.1.5")
+    dash, mon, chain, reg, hist, now = _world(tmp_path)
+    dash.sidecar_latest = "0.1.6"
+    for nid, v in (("ref-a", "0.1.6"), ("vol-01", "0.1.3")):
+        _node(mon, reg, nid, 100).profile["sidecar_version"] = v
+    mon.evaluate()
+    live = dash.build_live(time.time())
+    assert live["sidecar_latest"] == "0.1.6"
+    assert [(n["sidecar"], n["sidecar_update"]) for n in live["nodes"]] == [("0.1.6", False), ("0.1.3", True)]

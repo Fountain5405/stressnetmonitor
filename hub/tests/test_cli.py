@@ -67,3 +67,17 @@ def test_rotate_token_rewrites_message(tmp_path, capsys):
     text = (tmp_path / "data" / "welcome" / "vol-y.txt").read_text()
     assert new != old and new in text and old not in text
     assert "--hub https://other.example" in text
+
+
+def test_ping_text_announces_newest_sidecar(tmp_path):
+    import re
+
+    from msnm.server import SIDECAR_SCRIPT, ping_text, sidecar_latest
+    assert ping_text("vol-x", None, 100.0, "0.1.6", "AB12") == "pong vol-x\nsidecar_latest\t0.1.6\npublic_id\tAB12\n"
+    m = re.search(r'^SIDECAR_VERSION="([0-9.]+)"', SIDECAR_SCRIPT.read_text(), re.M)
+    assert sidecar_latest() == m.group(1)                 # this checkout's sidecar
+    f = tmp_path / "s.sh"
+    f.write_text('#!/usr/bin/env bash\nSIDECAR_VERSION="1.2.3"\n')
+    assert sidecar_latest(f) == "1.2.3"
+    f.write_text('SIDECAR_VERSION="$(evil)"\n')
+    assert sidecar_latest(f) is None and sidecar_latest(tmp_path / "missing") is None

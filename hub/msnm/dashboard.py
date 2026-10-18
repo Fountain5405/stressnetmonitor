@@ -157,6 +157,22 @@ def _median(xs: list) -> float | None:
     return statistics.median(xs) if xs else None
 
 
+_SIDECAR_RE = re.compile(r"\d{1,4}(?:\.\d{1,4}){1,3}")
+
+
+def sidecar_version(v) -> str | None:
+    """A sidecar version as a node reported it: plain dotted numbers, else None."""
+    v = str(v or "").strip()
+    return v if _SIDECAR_RE.fullmatch(v) else None
+
+
+def version_newer(a: str | None, b: str | None) -> bool:
+    """Is dotted version a newer than b? False when either is unknown."""
+    if not (a and b):
+        return False
+    return tuple(map(int, a.split("."))) > tuple(map(int, b.split(".")))
+
+
 def hardware(profile: dict) -> dict:
     """Public hardware summary from a node's profile. Allow-list only: the
     profile also holds monerod arguments, paths and unit files."""
@@ -531,13 +547,14 @@ def load_history(parquet_root: str, until: float, window_s: float = WINDOW_S) ->
 
 class Dashboard:
     def __init__(self, cfg: DashboardConfig, monitor: Monitor, chain: Chain, history: History,
-                 registry: Registry, references: list[str]):
+                 registry: Registry, references: list[str], sidecar_latest: str | None = None):
         self.cfg = cfg
         self.monitor = monitor
         self.chain = chain
         self.history = history
         self.registry = registry
         self.references = list(references)
+        self.sidecar_latest = sidecar_version(sidecar_latest)
         self._cache: dict[str, tuple[float, bytes, bytes]] = {}
         self._id_cache: tuple[tuple, dict[str, str]] = ((), {})
         self._static = self._load_static()
@@ -719,6 +736,7 @@ class Dashboard:
             "v": 1,
             "now": round(now, 3),
             "links": [{"label": str(x.get("label") or x["url"]), "url": str(x["url"])} for x in self.cfg.links],
+            "sidecar_latest": self.sidecar_latest,
             "network": network,
             "blocks": recent,
             "nodes": [self._node(nl, now, last30_blocks) for nl in self._visible()],
@@ -733,10 +751,14 @@ class Dashboard:
         start = info.get("start_time")
         lag = nl.lag_hist[-1][1] if nl.lag_hist else None
         ms_hist = self.history.block_ms.get(nid, {})
+        prof = {**self.history.profiles.get(nid, {}), **nl.profile}
+        sidecar = sidecar_version(prof.get("sidecar_version"))
         return {
             "id": self.public(nid),
             "ref": nid in self.references,
-            "hw": hardware({**self.history.profiles.get(nid, {}), **nl.profile}),
+            "hw": hardware(prof),
+            "sidecar": sidecar,
+            "sidecar_update": version_newer(self.sidecar_latest, sidecar),
             "rpc": self.history.rpc_stats(nid, now),
             "version": clean(info.get("version"), 40),
             "state": nl.state,
