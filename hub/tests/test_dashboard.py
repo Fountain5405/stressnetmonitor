@@ -8,7 +8,8 @@ from aiohttp.test_utils import TestClient, TestServer
 from msnm.chain import Chain, RefConfig
 from msnm.config import load
 from msnm import cpudb
-from msnm.dashboard import ID_ALPHABET, Dashboard, DashboardConfig, History, hardware, load_history, public_id
+from msnm.dashboard import (ID_ALPHABET, Dashboard, DashboardConfig, History, disk_band, hardware, load_history,
+                            public_id, ram_class)
 from msnm.live import Monitor, Thresholds
 from msnm.registry import Registry
 from msnm.tables import ParquetSink
@@ -71,29 +72,35 @@ def _node(mon, reg, nid, top):
     return nl
 
 
-def test_hardware_allow_list():
+def test_hardware_by_class_only():
     hw = hardware(PROFILE)
-    assert hw["cpu"] == "Intel Core2 Quad Q6600 @ 2.40GHz"
-    assert (hw["cores"], hw["threads"], hw["mhz"]) == (4, 4, 2394)
-    assert hw["ram_bytes"] == 4004352 * 1024
-    assert [d["kind"] for d in hw["disks"]] == ["SSD", "HDD"]   # the LVM device is skipped
-    assert hw["disks"][0]["model"] == "Samsung SSD 850"
-    assert (hw["codename"], hw["gen"], hw["process"], hw["year"]) == ("Kentsfield", "Core", "65 nm", 2007)
-    assert (hw["l2_bytes"], hw["l3_bytes"], hw["cache_src"]) == (8 << 20, None, "measured")
+    assert (hw["cpu"], hw["segment"], hw["era"]) == ("Intel Core 2", "desktop", "2005–09")
+    assert (hw["cores"], hw["threads"], hw["ram_gb"], hw["swap_gb"]) == (4, 4, 4, 4)
+    # the LVM device is skipped
+    assert hw["disks"] == [{"kind": "SSD", "size": "128–256 GB"}, {"kind": "HDD", "size": "256–512 GB"}]
     assert [x["n"] for x in hw["isa"] if x["on"]] == ["SSSE3"] and len(hw["isa"]) == 10   # every flag checked
-    vm = hardware({"virtualized": "yes", "data_devices": "vda", "disk.vda": "rotational=1 sectors=8 model="})
-    assert vm["vm"] and vm["disks"][0]["kind"] == "virtual disk"
-    xeon = hardware({"virtualized": "yes", "cpu_model": "Intel(R) Xeon(R) Silver 4116 CPU @ 2.10GHz",
-                     "cpu_cache": "l2=4096K l2n=6 l3=16384K l3n=6", "cpu_flags": "aes,avx"})
-    # in a VM the reported cache is the hypervisor's: the chip spec is used
-    assert (xeon["codename"], xeon["l3_bytes"], xeon["cache_src"]) == ("Skylake-SP", 16896 << 10, "spec")
+    # no exact model, codename, clock, cache or byte count
+    exact = ("Q6600", "Kentsfield", "Samsung", "WDC", "2394", "2.40", "4004352", str(4004352 * 1024), "488397168")
+    assert not any(s in json.dumps(hw) for s in SECRETS + exact)
+    vm = hardware({"virtualized": "yes", "data_devices": "vda", "disk.vda": "rotational=1 sectors=335544320 model="})
+    assert vm["vm"] and vm["disks"] == [{"kind": "virtual disk", "size": "128–256 GB"}]
+    xeon = hardware({"virtualized": "yes", "cpu_model": "Intel(R) Xeon(R) CPU E5-2690 v4 @ 2.60GHz",
+                     "cpu_flags": "aes,avx", "mem_total_kb": "8131064"})
+    assert (xeon["cpu"], xeon["segment"], xeon["era"], xeon["ram_gb"]) == ("Intel Broadwell", "server", "2015–19", 8)
     # an old sidecar (no cpu_flags_checked) checked fewer flags
     assert [x["n"] for x in xeon["isa"]] == ["AES-NI", "AVX", "AVX2", "AVX-512", "SHA", "BMI2", "ADX"]
     qemu = hardware({"cpu_model": "Intel Core Processor (Haswell, no TSX, IBRS)", "virtualized": "yes"})
-    assert qemu["virtual_cpu"] and qemu["gen"] == "virtual CPU (Haswell feature set)" and qemu["l3_bytes"] is None
-    assert hardware({})["isa"] == [] and hardware({})["gen"] == ""
-    assert not any(s in json.dumps(hw) for s in SECRETS)
-    assert hardware({"cpu_model": "<script>alert(1)</script>"})["cpu"] == "scriptalert(1)/script"
+    assert (qemu["cpu"], qemu["virtual_cpu"], qemu["segment"], qemu["era"]) == (
+        "virtual CPU (Haswell feature set)", True, None, None)
+    # a model the table doesn't know: only its maker
+    assert (hardware({"cpu_model": "Intel(R) Future CPU 9999X"})["cpu"], hardware({"arch": "aarch64"})["cpu"]) == (
+        "Intel CPU", "Arm CPU")
+    assert hardware({})["isa"] == [] and hardware({})["cpu"] == ""
+    assert hardware({"cpu_model": "<script>alert(1)</script>"})["cpu"] == ""
+    assert [ram_class(kb) for kb in (None, 2027024, 3804536, 32798812, 1600 * 2**20)] == [None, 2, 4, 32, 1792]
+    assert [disk_band(n) for n in (None, 120 * 10**9, 256_060_514_304, 1_000_204_886_016, 2_000_398_934_016,
+                                   20 * 10**12)] == [None, "up to 128 GB", "128–256 GB", "512 GB–1 TB", "1–2 TB",
+                                                     "over 16 TB"]
 
 
 def test_live_publishes_allow_listed_fields_only(tmp_path):
@@ -111,10 +118,11 @@ def test_live_publishes_allow_listed_fields_only(tmp_path):
     v = live["nodes"][1]
     assert (v["state"], v["lag"], v["ref"]) == ("OK", 0, False) and not {"tier", "position", "note"} & set(v)
     assert len(v["id"]) == 4 and v["id"] != live["nodes"][0]["id"]
-    assert v["hw"]["cpu"].startswith("Intel Core2 Quad") and v["sync"] is None
+    assert v["hw"]["cpu"] == "Intel Core 2" and v["sync"] is None
+    assert v["mem_used"] is None and not {"mem_total", "mem_avail"} & set(v)   # a share only, no byte counts
     mon.nodes["vol-01"].profile = {}
-    hist.profiles["vol-01"] = {"cpu_model": "From Parquet"}
-    assert dash.build_live(time.time())["nodes"][1]["hw"]["cpu"] == "From Parquet"
+    hist.profiles["vol-01"] = {"cpu_model": "Intel(R) Pentium(R) CPU G6950 @ 2.80GHz"}
+    assert dash.build_live(time.time())["nodes"][1]["hw"]["cpu"] == "Intel Westmere"
     reg.revoke("vol-01")
     assert [n["id"] for n in dash.build_live(time.time())["nodes"]] == [dash.public("ref-a")]
 
@@ -257,6 +265,7 @@ def test_cpudb():
         "AMD EPYC 7551 32-Core Processor": ("Naples", "14 nm", 2017),
         "Intel(R) Core(TM) i7-4770 CPU @ 3.40GHz": (None, "22 nm", 2013),
         "Intel(R) Core(TM) i5-8250U CPU @ 1.60GHz": (None, "14 nm", None),
+        "Intel(R) Core(TM) i5-1135G7 @ 2.40GHz": ("Tiger Lake", "10 nm", 2020),
         "Intel(R) Xeon(R) Gold 6230 CPU @ 2.10GHz": ("Cascade Lake-SP", "14 nm", 2019),
         "AMD Ryzen 5 5600G with Radeon Graphics": ("Cezanne", "7 nm", 2021),
         "AMD EPYC-Rome Processor": (None, None, None),
@@ -273,6 +282,22 @@ def test_cpudb():
         {"n": "NEON", "on": True}, {"n": "AES", "on": True}, {"n": "SHA2", "on": False}, {"n": "PMULL", "on": False}]
     assert cpudb.parse_cache("l1d=32K l1dn=4 l2=512K l2n=12 l3=16384K l3n=2") == {"l2": 6 << 20, "l3": 32 << 20}
     assert cpudb.parse_cache("l2=bogus") == {}
+    segments = {
+        "Intel(R) Core(TM) i7-4770 CPU @ 3.40GHz": "desktop",
+        "Intel(R) Core(TM) i5-8250U CPU @ 1.60GHz": "mobile",
+        "Intel(R) Core(TM) i5-1135G7 @ 2.40GHz": "mobile",
+        "Intel(R) Core(TM)2 Duo CPU     T7200  @ 2.00GHz": "mobile",
+        "AMD Ryzen 9 5900XT 16-Core Processor": "desktop",
+        "AMD Ryzen 7 5700U with Radeon Graphics": "mobile",
+        "AMD Ryzen Threadripper 3970X 32-Core Processor": "workstation",
+        "AMD EPYC 7551 32-Core Processor": "server",
+        "Raspberry Pi 4 Model B Rev 1.4": "single-board",
+        "Some Future CPU": None,
+    }
+    for model, want in segments.items():
+        assert cpudb.segment(model) == want, model
+    assert [cpudb.era(y) for y in (2007, 2020, 2024, None)] == ["2005–09", "2020–24", "2020–24", None]
+    assert [cpudb.vendor(*a) for a in (("AMD EPYC 7551",), ("", "aarch64"), ("Some Future CPU",))] == ["AMD", "Arm", ""]
 
 
 def test_rpc_times(tmp_path):

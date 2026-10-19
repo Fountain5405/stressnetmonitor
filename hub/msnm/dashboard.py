@@ -173,55 +173,80 @@ def version_newer(a: str | None, b: str | None) -> bool:
     return tuple(map(int, a.split("."))) > tuple(map(int, b.split(".")))
 
 
+# memory sizes machines are sold or rented with, in GiB
+_RAM_GIB = (0.5, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024)
+# disk size bands, upper bounds in GB; a drive sold as "256 GB" is a little over 256e9 bytes
+_DISK_BANDS = ((128, "up to 128 GB"), (256, "128–256 GB"), (512, "256–512 GB"), (1000, "512 GB–1 TB"),
+               (2000, "1–2 TB"), (4000, "2–4 TB"), (8000, "4–8 TB"), (16000, "8–16 TB"))
+
+
+def ram_class(kb: int | None) -> float | None:
+    """MemTotal as the size the machine was sold with: the kernel keeps some
+    back, so it's the smallest common size at or above it."""
+    if not kb:
+        return None
+    gib = kb / 2**20
+    size = next((s for s in _RAM_GIB if s >= gib), None)
+    return size if size is not None else math.ceil(gib / 256) * 256
+
+
+def disk_band(n: int | None) -> str | None:
+    if not n:
+        return None
+    gb = n / 1e9
+    return next((label for top, label in _DISK_BANDS if gb <= top * 1.05), "over 16 TB")
+
+
+def _mem_used(host: dict) -> float | None:
+    total, avail = _int(host.get("mem_total_bytes")), _int(host.get("mem_avail_bytes"))
+    return round(1 - avail / total, 3) if total and avail is not None else None
+
+
 def hardware(profile: dict) -> dict:
-    """Public hardware summary from a node's profile. Allow-list only: the
-    profile also holds monerod arguments, paths and unit files."""
+    """Public hardware summary from a node's profile, by class only. Allow-list:
+    the profile also holds monerod arguments, paths and unit files. And no exact
+    CPU or disk model, clock, cache or byte count: together those can pick out
+    a machine or a hosting plan. node_profile keeps them all for analysis."""
     vm = profile.get("virtualized") == "yes"
     devs = str(profile.get("data_devices") or "").split()
     physical = [d for d in devs if not d.startswith("dm-")] or devs
     disks = []
     for dev in physical[:4]:
         kv = dict(p.split("=", 1) for p in str(profile.get(f"disk.{dev}") or "").split() if "=" in p)
-        model = kv.get("model", "").replace("_", " ")
-        if vm or model.startswith("QEMU") or dev.startswith(("vd", "xvd")):
-            kind, model = "virtual disk", ""
+        if vm or kv.get("model", "").startswith("QEMU") or dev.startswith(("vd", "xvd")):
+            kind = "virtual disk"
         elif dev.startswith("nvme"):
             kind = "NVMe"
         else:
             kind = "HDD" if kv.get("rotational") == "1" else "SSD"
         sectors = _int(kv.get("sectors"))
-        disks.append({"kind": kind, "model": clean(model, 40), "bytes": sectors * 512 if sectors else None})
-    model = str(profile.get("cpu_model") or "")
-    cpu = re.sub(r"\((R|TM|tm)\)", "", model)
-    cpu = re.sub(r"\b(CPU|Processor)\b", "", cpu)
-    mem, swap, khz = (_int(profile.get(k)) for k in ("mem_total_kb", "swap_total_kb", "cpu_max_khz"))
+        disks.append({"kind": kind, "size": disk_band(sectors * 512 if sectors else None)})
+    model, arch = str(profile.get("cpu_model") or ""), profile.get("arch")
     spec = cpudb.lookup(model)
-    # Cache: what the node reports, except in a VM (the hypervisor makes it up),
-    # else the chip's spec for exact models.
-    cache = {} if vm else cpudb.parse_cache(profile.get("cpu_cache"))
-    cache_src = "measured" if cache else None
-    if not cache and spec and not spec.virtual:
-        cache = {k: kb * 1024 for k, kb in (("l2", spec.l2_kb), ("l3", spec.l3_kb)) if kb}
-        cache_src = "spec" if cache else None
+    virtual = bool(spec and spec.virtual)
+    maker = cpudb.vendor(model, arch)
+    if virtual:
+        cpu = spec.gen
+    elif spec:
+        # the "Core" microarchitecture is the Core 2 line; "Intel Core" reads as today's brand
+        cpu = f"{maker} {'Core 2' if spec.gen == 'Core' else spec.gen}".strip()
+    else:
+        cpu = f"{maker} CPU" if maker else ""
+    swap = _int(profile.get("swap_total_kb"))
+    swap_gib = swap / 2**20 if swap is not None else None
     return {
         "cpu": clean(cpu, 60),
+        "segment": None if virtual else cpudb.segment(model),
+        "era": None if virtual or not spec else cpudb.era(spec.year),
         "cores": _int(profile.get("cpu_physical_cores")),
         "threads": _int(profile.get("cpu_logical")),
-        "mhz": khz // 1000 if khz else None,
-        "ram_bytes": mem * 1024 if mem else None,
-        "swap_bytes": swap * 1024 if swap is not None else None,
+        "ram_gb": ram_class(_int(profile.get("mem_total_kb"))),
+        "swap_gb": None if swap_gib is None else float(round(swap_gib) if swap_gib >= 4 else round(swap_gib * 2) / 2),
         "vm": vm,
+        "virtual_cpu": virtual,
         "disks": disks,
-        "arch": clean(profile.get("arch"), 16),
-        "gen": clean(spec.gen, 48) if spec else "",
-        "codename": clean(spec.codename, 32) if spec and spec.codename else "",
-        "process": clean(spec.process, 16) if spec and spec.process else "",
-        "year": spec.year if spec else None,
-        "virtual_cpu": bool(spec and spec.virtual),
-        "l2_bytes": cache.get("l2"),
-        "l3_bytes": cache.get("l3"),
-        "cache_src": cache_src,
-        "isa": (cpudb.isa(profile.get("arch"), profile["cpu_flags"], profile.get("cpu_flags_checked"))
+        "arch": clean(arch, 16),
+        "isa": (cpudb.isa(arch, profile["cpu_flags"], profile.get("cpu_flags_checked"))
                 if "cpu_flags" in profile else []),
     }
 
@@ -782,8 +807,8 @@ class Dashboard:
             "steal": _num(host.get("cpu_steal_ratio"), 3),
             "mcpu": _num(proc.get("cpu_cores"), 2),
             "rss": _num(proc.get("rss_bytes")),
-            "mem_total": _num(host.get("mem_total_bytes")),
-            "mem_avail": _num(host.get("mem_avail_bytes")),
+            # a share, not bytes: the exact total identifies a machine (hw.ram_gb is the rounded size)
+            "mem_used": _mem_used(host),
             "swap_used": _num(host.get("swap_used_bytes")),
             "disk_util": _num(busiest["util_ratio"], 3) if busiest else None,
             "disk_await_ms": _num(busiest["await_ms"], 2) if busiest else None,

@@ -195,7 +195,7 @@ h2 small { letter-spacing: 0; text-transform: none; font-size: 12px; }
 .tag.warn { color: var(--warn); border-color: rgba(245, 184, 61, 0.45); background: rgba(245, 184, 61, 0.07); }
 .hw { margin-top: 7px; color: #c3cdd6; font-size: 12.5px; }
 .gen { margin-top: 2px; color: var(--muted); font-size: 12px; }
-.gen[title] { cursor: help; }
+.hw[title] { cursor: help; }
 .isa { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
 .isa span {
   font-family: var(--mono); font-size: 10px; line-height: 1.5; padding: 0 5px; border-radius: 4px;

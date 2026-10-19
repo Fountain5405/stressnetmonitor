@@ -30,11 +30,7 @@
     while (Math.abs(b) >= 1000 && i < u.length - 1) { b /= 1000; i++; }
     return (i === 0 ? b.toFixed(0) : b.toFixed(b < 10 ? 2 : b < 100 ? 1 : 0)) + " " + u[i];
   }
-  function gib(b) {
-    if (!ok(b)) return "—";
-    const g = b / 2 ** 30;
-    return (g < 10 ? g.toFixed(1) : Math.round(g)) + " GB";
-  }
+  const gb = (v) => (ok(v) ? (v < 1 ? v.toFixed(1) : Math.round(v)) + " GB" : "—");
   function si(v) {
     if (!ok(v)) return "—";
     const u = ["", "k", "M", "G", "T", "P"];
@@ -69,11 +65,6 @@
     if (v < 1) return v.toFixed(2) + " ms";
     if (v < 10) return v.toFixed(1) + " ms";
     return ms(v);
-  }
-  function cacheSize(b) {
-    if (!ok(b)) return "";
-    const m = b / 2 ** 20;
-    return m >= 1 ? (Number.isInteger(m) ? m : m.toFixed(1)) + " MB" : Math.round(b / 1024) + " KB";
   }
   function secs(v) {
     if (!ok(v)) return "—";
@@ -336,33 +327,30 @@
     c.bars[key].style.width = (ok(r) ? Math.max(0, Math.min(1, r)) * 100 : 0).toFixed(1) + "%";
   }
 
+  const HW_TIP = "Hardware is shown by class: no exact CPU or disk model, RAM as the nearest common size, disks as a size range.";
+  const VCPU_TIP = " This is a virtual CPU model: the hypervisor shows a feature set, not the host's real chip.";
+
+  // CPU class · cores · RAM, and the disks (identical ones once, with a count)
   function hwText(hw) {
     if (!hw) return ["", ""];
     const parts = [];
     if (hw.cpu) parts.push(hw.cpu);
     if (hw.vm && ok(hw.threads)) parts.push(hw.threads + " vCPU");
     else if (ok(hw.cores)) parts.push(hw.cores + "c/" + (ok(hw.threads) ? hw.threads : hw.cores) + "t");
-    if (ok(hw.ram_bytes)) parts.push(gib(hw.ram_bytes) + " RAM");
-    const disks = (hw.disks || []).map((d) => [d.model, d.kind, ok(d.bytes) ? bytes(d.bytes) : ""].filter(Boolean).join(" "));
+    if (ok(hw.ram_gb)) parts.push(gb(hw.ram_gb) + " RAM");
+    const count = new Map();
+    for (const d of hw.disks || []) {
+      const t = [d.kind, d.size].filter(Boolean).join(" ");
+      count.set(t, (count.get(t) || 0) + 1);
+    }
+    const disks = [...count].map(([t, k]) => (k > 1 ? k + "× " : "") + t);
     return [parts.join(" · "), disks.join(" + ")];
   }
 
-  // generation · process · year · cache, and where the numbers come from
+  // segment · launch era, looked up from the model name
   function genText(hw) {
-    if (!hw) return ["", ""];
-    const parts = [];
-    if (hw.codename && hw.gen) parts.push(hw.codename + " (" + hw.gen + ")");
-    else if (hw.gen || hw.codename) parts.push(hw.gen || hw.codename);
-    if (hw.process) parts.push(hw.process);
-    if (ok(hw.year)) parts.push(String(hw.year));
-    const cache = [["L2", hw.l2_bytes], ["L3", hw.l3_bytes]].filter((x) => ok(x[1])).map((x) => x[0] + " " + cacheSize(x[1]));
-    if (cache.length) parts.push(cache.join(" · ") + (hw.cache_src === "spec" && hw.vm ? " (host chip)" : ""));
-    let tip = "";
-    if (hw.virtual_cpu) tip = "A virtual CPU model: the hypervisor shows a feature set, not the host's real chip.";
-    else if (hw.gen) tip = "Generation, process and launch year are looked up from the CPU model name.";
-    if (cache.length) tip += (tip ? " " : "") + (hw.cache_src === "measured" ? "Cache sizes are as the node reports them (totals per chip)."
-      : "Cache sizes are the chip's specification" + (hw.vm ? "; this VM shares the host's chip." : "."));
-    return [parts.join(" · "), tip];
+    if (!hw || hw.virtual_cpu) return "";
+    return [hw.segment, hw.era ? "launched " + hw.era : ""].filter(Boolean).join(" · ");
   }
 
   function renderIsa(box, isa) {
@@ -396,9 +384,8 @@
 
     const [hw, disk] = hwText(n.hw);
     c.hw.textContent = hw;
-    const [gen, genTip] = genText(n.hw);
-    c.gen.textContent = gen;
-    c.gen.title = genTip;
+    c.hw.title = n.hw ? HW_TIP + (n.hw.virtual_cpu ? VCPU_TIP : "") : "";
+    c.gen.textContent = genText(n.hw);
     renderIsa(c.isa, n.hw && n.hw.isa);
     c.disk.textContent = disk;
     // the reason is from the state change (a syncing node's lag then); the sync bar is current
@@ -423,9 +410,8 @@
     setMetric(c, "pool", int(n.pool_txs), ok(cover) && !n.ref ? pct(Math.min(cover, 9.99)) + " of ref" : "");
     setMetric(c, "cpu", pct(n.cpu), ok(n.mcpu) ? fixed(n.mcpu, 1) + " cores" : "");
     bar(c, "cpu", n.cpu);
-    const used = ok(n.mem_total) && ok(n.mem_avail) && n.mem_total > 0 ? 1 - n.mem_avail / n.mem_total : null;
-    setMetric(c, "ram", pct(used), ok(n.mem_total) ? "of " + gib(n.mem_total) : "");
-    bar(c, "ram", used);
+    setMetric(c, "ram", pct(n.mem_used), n.hw && ok(n.hw.ram_gb) ? "of " + gb(n.hw.ram_gb) : "");
+    bar(c, "ram", n.mem_used);
     setMetric(c, "disk", pct(n.disk_util), ok(n.disk_await_ms) ? fixed(n.disk_await_ms, 1) + " ms I/O" : "");
     bar(c, "disk", n.disk_util);
 

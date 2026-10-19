@@ -107,9 +107,9 @@ def _family(s: str) -> CpuSpec | None:
     if m:
         return {"5": CpuSpec("Coffee Lake", None, "14 nm", 2018), "6": CpuSpec("Comet Lake", None, "14 nm", 2020),
                 "7": CpuSpec("Alder Lake", None, "Intel 7", 2022)}[m.group(1)]
-    m = re.search(r"\bCore i[3579]-(\d{4,5})([A-Z]*)\b", s)
+    m = re.search(r"\bCore i[3579]-(\d{4,5})([A-Z][A-Z0-9]*)?\b", s)
     if m:
-        num, suffix = m.group(1), m.group(2)
+        num, suffix = m.group(1), m.group(2) or ""
         gen = int(num[:2]) if num[0] == "1" else int(num[0])
         if len(num) == 4 and num[0] == "1":       # 10th-14th gen mobile: 1035G1, 1135G7, 1255U
             if suffix.startswith("G") and gen == 10:
@@ -184,6 +184,52 @@ def _family(s: str) -> CpuSpec | None:
         if re.search(pat, s):
             return spec
     return None
+
+
+def vendor(model: str, arch: str | None = None) -> str:
+    s = normalize(model)
+    if re.search(r"\b(Intel|GenuineIntel|Core2|Pentium|Celeron|Xeon)\b", s):
+        return "Intel"
+    if re.search(r"\b(AMD|AuthenticAMD|Ryzen|EPYC|Opteron|Athlon)\b", s):
+        return "AMD"
+    if re.search(r"Raspberry Pi\b", s) or str(arch or "").startswith(("aarch64", "arm")):
+        return "Arm"
+    return ""
+
+
+def segment(model: str) -> str | None:
+    """server, workstation, desktop, mobile or single-board, from the model name; None when unsure."""
+    s = normalize(model)
+    if re.search(r"\b(Xeon|EPYC|Opteron)\b", s):
+        return "server"
+    if re.search(r"\bThreadripper\b", s):
+        return "workstation"
+    if re.search(r"Raspberry Pi\b", s):
+        return "single-board"
+    m = re.search(r"\bCore i[3579]-\d{4,5}([A-Z][A-Z0-9]*)?\b", s)
+    if m:
+        return "desktop" if (m.group(1) or "") in _DESKTOP_SUFFIX else "mobile"
+    m = re.search(r"\bCore Ultra [579] ([12])\d{2}([A-Z]*)\b", s)
+    if m:
+        return "desktop" if m.group(1) == "2" and m.group(2) in ("K", "KF", "F", "", "T") else "mobile"
+    m = re.search(r"\bRyzen [3579] (PRO )?\d{4}([A-Z0-9]*)\b", s)
+    if m:
+        return "desktop" if m.group(2) in ("", "X", "XT", "X3D", "G", "GE", "F") else "mobile"
+    m = re.search(r"\bCore2 (Duo|Quad|Extreme) (CPU )?([A-Z]+)\d", s)
+    if m:
+        return "desktop" if m.group(3) in ("E", "Q", "QX", "X") else "mobile"
+    if re.search(r"\bPentium (Gold )?(CPU )?G\d{4}\b", s) or re.search(r"\bFX-\d{4}\b", s):
+        return "desktop"
+    return None
+
+
+def era(year: int | None) -> str | None:
+    """A launch year as its five-year span, "2015–19": with the microarchitecture and
+    core count, the exact year can single out one model."""
+    if not year:
+        return None
+    lo = year - year % 5
+    return f"{lo}–{(lo + 4) % 100:02d}"
 
 
 def lookup(model: str) -> CpuSpec | None:
