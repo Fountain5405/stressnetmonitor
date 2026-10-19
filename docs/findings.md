@@ -381,7 +381,7 @@ The aim is to test whether the drops above also happen with a normal peer set, r
 
 - **New operator node `op-q6600-ssd` joined (2026-10-16 19:45 UTC, measured):**
   - Hardware: Intel Core2 Quad Q6600 (4 cores / 4 threads, 2.4 GHz, 2007-era desktop), 3.8 GB RAM, consumer SSDs (root SSD nearly full; a 448 GB SSD holds the LMDB). Our oldest CPU by a wide margin and the first 4 GB-class RAM node between `exp-2c2g` (2 GB) and the rest.
-  - Setup: same stressnet binary as every node (v0.19.0.0-beta.3.0), pruned testnet, single peer (`ref-a`), initial sync from block 1 started 19:45 UTC. Sync duration to be recorded here as a result once it reaches the tip. (The sync was later restarted with a temporary 4-peer bootstrap — see the pruning finding below — and was paused on 2026-10-17 for a machine move at height 915,487; the recorded duration will note the pause.)
+  - Setup: same stressnet binary as every node (v0.19.0.0-beta.3.0), pruned testnet, single peer (`ref-a`), initial sync from block 1 started 19:45 UTC. (The sync was later restarted with a temporary 4-peer bootstrap — see the pruning finding below — and was paused on 2026-10-17 for a machine move at height 915,487.) It reached the tip on 2026-10-18 after 35 h 46 min: see 2026-10-18.
   - During the sync its batches carry `rpc_error` rows with `status BUSY` instead of headers — expected behaviour (see monitor notes), not faults.
   - **A pruned node cannot initial-sync from a single pruned peer (measured):** with `ref-a` (pruning seed 389, one stripe) as its only peer, `op-q6600-ssd` made zero progress from block 1 for 45+ minutes: the connection handshakes, `SYNCHRONIZATION started`, no data flows (0 B/s), and the connection drops on a regular ~24 s cycle. Reason: old block spans exist only on peers whose pruning stripe covers them, and one pruned peer covers at most 1/8 of the chain; near-tip blocks (within the ~55 k pruning horizon) are the only ones every pruned peer serves — which is why single-peer peering works fine *after* a node reaches the tip. The same failure appears in `op-g6950-hdd`'s log from 2026-10-06 (`Failed to request missing objects, dropping connection`) during its initial single-peer sync; it finished only once it had several internet peers. Practical rule: bootstrap a pruned node with multiple peers (or copy a synced LMDB), then drop to single-peer.
   - **New reference node `ref-b` joined (2026-10-17 04:20 UTC):** the first UNPRUNED node in the fleet — 16-core / 32-thread Ryzen 9 5900XT, 31 GB RAM, chain on a two-SSD LVM stripe. Registered as the hub's second reference (the canonical chain follows the freshest reference by cumulative difficulty, so `ref-a` stays canonical while `ref-b` syncs). Purpose: a full-chain anchor on the LAN so future pruned nodes can bootstrap single-peer instead of using the 4-peer workaround. Sync duration to be recorded here. Topology from 2026-10-17 ~05:00 UTC (operator decision): `ref-b` is the LAN's only internet-facing stressnet node (outbound, 8 peers), and `op-q6600-ssd` syncs from `ref-b` and `ref-a` over the LAN only. Rationale: a full node is the only kind of peer that can serve a pruned node's whole initial sync, and one internet-facing node per shared public IP avoids competing with `ref-a` for remotes' one-connection-per-IP slots. Measured at the switch: of the 25 peers in `ref-a`'s white list, 10 were full nodes (pruning seed 0).
@@ -393,6 +393,46 @@ The aim is to test whether the drops above also happen with a normal peer set, r
 - **`ref-b` accepts inbound internet connections (measured):** from 04:52:39 UTC, 4 minutes after start, it has had inbound peers from internet addresses; at 16:00 UTC 20 of its 22 inbound peers were internet peers (10 full nodes, 10 pruned). The inbound path is a static port forward to this node set up by the operator, which is intended: from ~16:30 UTC `ref-b` is the LAN's internet-facing node in both directions, with inbound capped at 32 peers (`--in-peers 32`). `ref-a` still shows only LAN inbound peers. Data: `connections` (`incoming`, `host`).
 - **`op-q6600-ssd` (Core2 Q6600) sync slows ~50x near block 1,905,000 (measured):** hourly progress was 105k–186k blocks/h from 04:00 to 11:59 UTC (heights 921,491 → 1,904,840), then 9.4k, 2.2k, 1.8k, 3.1k blocks/h in the next four hours. At 16:00 UTC, over 300 consecutive blocks: average 497 ms per block in `p/t` timing, 0.58 s wall-clock per block, monerod at ~215% CPU, ~0% I/O wait, 437 MB swap used of 3.8 GB RAM. So it is CPU-bound on block verification, not waiting on its LAN peers or the disk. **Correction (measured, 17:00 UTC):** the slow stretch ended near block 1,923,000. It covered ~18,000 blocks in ~4 hours, and from 16:00 UTC the rate was back at 20,000–46,000 blocks/h (half-hourly progress, `info`). So it was a stretch of heavier blocks, not a sustained rate. The "~7 days to the tip" projection made from it at 16:00 UTC was wrong. **Hypothesis:** the blocks from ~1.905 M to ~1.923 M carry many more transactions (ring-signature and range-proof verification) than those around them, and a 2007-era 4-core CPU verifies them at ~2 blocks/s. A minimum-spec data point: a heavy stretch costs this CPU ~0.5 s per block. Whether the whole initial sync is practical will show in the total time, recorded when the node reaches the tip. The node is left to finish on its own so the full sync duration can be recorded. Data: `block_timing` (`total_ms`), `info` (`height`), monerod log `Height:` lines.
 - **RPC response time separates the nodes; the median does not (measured, 15:00–21:00 UTC, ~720 `get_info` polls per node):** the sidecar times each RPC call on the node itself, so no network time is in it; it polls every 30 s with a 10 s limit per call. At the tip every node answered `get_info` in 0.6–2 ms at the median; the difference is in the slowest calls. `ref-a`/`ref-b`: 95th percentile 0.6 ms, slowest 48 ms. `exp-2c2g` and `vol-02a`–`d`: 95th percentile 1.5–4 ms, slowest 0.07–0.9 s. `op-g6950-hdd` (spinning disk): 95th percentile 100 ms, slowest 2.0 s. `vol-01` (data disk ~100% busy with ~300 ms I/O latency in one snapshot): 90th percentile 120 ms, 95th 720 ms, slowest 5.9 s. `op-q6600-ssd` during its initial sync: 42% of calls got no answer within 10 s (all timed out at 10.0 s); the ones that answered took 1.4 s at the median and 7.3 s at the 90th percentile, so the median over all calls is around 6–7 s. Its monerod kept adding blocks the whole time; the hub showed it as UNRESPONSIVE about half the time from 11:11 UTC. **Hypothesis:** while syncing, `get_info` waits for block processing to release a lock the two share, and the two slow-disk nodes' tails come from disk I/O (a correlation only; neither is verified). Data: `info` (`rpc_response_time`), `rpc_error` (`method`, `rpc_response_time`).
+
+## 2026-10-18
+
+- **`op-q6600-ssd` (Core2 Q6600, 3.8 GB RAM) reached the tip after an initial sync of 35 h 46 min (measured).**
+  - **When:** monerod logged "You are now synchronized" at 07:32:46 UTC, at chain height 3,112,213 (top block 3,112,212). Its first height poll was at 2026-10-16 19:47:08 UTC, at height 1.
+  - **What the wall-clock time includes:** the setup changes listed under 2026-10-15/16. These were:
+    - the stall with a single pruned peer;
+    - the restart with a 4-peer bootstrap;
+    - a pause for a machine move at block 915,487 (the polls show a 15-minute gap at 10-17 03:44 UTC);
+    - the switch to LAN-only peers at 10-17 04:48 UTC.
+  - **For comparison:**
+    - `exp-2c2g` (2 vCPUs on one core, 2 GB) took 18 h 15 min from the network, to the 10-08 tip, about 7,000 blocks lower.
+    - `ref-b` (Ryzen 9 5900XT, unpruned) took 5 h 31 min.
+  - **Where the time went (measured).** Sources: `info` (`height`), `block_timing` (`total_ms`) and `ref_block` (`num_txes`, `block_weight`). Transaction counts start at block 3,102,307, where the hub's reference data begins.
+
+    | Blocks | Produced | Wall-clock on `op-q6600-ssd` | Transactions | Block weight | Verify time (sum of `total_ms`) | Median per block |
+    |---|---|---|---|---|---|---|
+    | 1 – 3,101,999 | before the stress load | 31 h 36 min (10-16 19:47 → 10-18 03:23) | — | — | — | — |
+    | 3,102,000 – 3,112,213 | 10-04 → 10-18 | 4 h 10 min (03:23 → 07:33) | 736,592 | 6.16 GB | 14,371 s (4.0 h) | 392 ms |
+    | of which 3,103,000 – 3,103,999 | 10-05 06:00 → 10-06 ~22:00 (the first spam waves) | 2 h 23 min (03:23 → 05:46) | 556,592 | 4.35 GB | 8,028 s (14.4 ms per transaction) | 4.7 s and 6.6 s (the two 500-block halves) |
+    | of which 3,105,425 – 3,105,433 | 10-08 (the slowest blocks) | — | 56 per block | 9.94 MB per block | — | 86–90 s each |
+
+  - **Same blocks, both verified during an initial sync (measured):**
+    - The two 500-block halves of the spam wave took `exp-2c2g` a median 4.4 s and 6.1 s per block. `op-q6600-ssd` took 4.7 s and 6.6 s.
+    - So the 2007 quad-core is about 7% slower per block than a VM with 2 vCPUs on one modern core.
+    - **Hypothesis:** this fits verification being spread across all cores, with four 2007-era cores roughly matching one modern core.
+  - **Not comparable:** `ref-a` (190–236 ms) and `op-g6950-hdd` (686–1,028 ms) verified the same blocks as they arrived, with most of their transactions already checked in the pool.
+- **At the tip, `op-q6600-ssd` isn't the slowest node (measured).** The window is 128 blocks (3,112,214–3,112,341, 07:33–12:15 UTC) on a quiet network, about 23 transactions per block. Source: `block_timing`.
+
+  | Node | Median verify time | p90 | Max |
+  |---|---|---|---|
+  | `op-q6600-ssd` | 87 ms | 163 ms | 323 ms |
+  | `op-g6950-hdd` | 111 ms | — | — |
+  | `exp-2c2g` | 102 ms | — | — |
+  | `ref-a` | 24 ms | — | — |
+  | `ref-b` | 38 ms | — | — |
+
+  - **During the sync:** blocks with similar contents (3,111,500–3,112,213, about 20–22 transactions each) took it a median 418–456 ms, about 5× more.
+  - **Hypothesis:** at the tip it checked those transactions as they entered its pool, so block verification mostly skips them (see 2026-10-06, "a large block is fast when its transactions are already in the pool"). Whether it keeps up under a spam wave depends on how much of the transaction flow its pool can keep up with. That is untested until the next wave.
+  - **Resources at the tip:** 3.8 GB RAM, with about 0.7 GB in swap and 2.1 GB available. The pruned database is 13.76 GB.
 
 ---
 
