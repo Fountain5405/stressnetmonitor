@@ -434,6 +434,19 @@ The aim is to test whether the drops above also happen with a normal peer set, r
   - **Hypothesis:** at the tip it checked those transactions as they entered its pool, so block verification mostly skips them (see 2026-10-06, "a large block is fast when its transactions are already in the pool"). Whether it keeps up under a spam wave depends on how much of the transaction flow its pool can keep up with. That is untested until the next wave.
   - **Resources at the tip:** 3.8 GB RAM, with about 0.7 GB in swap and 2.1 GB available. The pruned database is 13.76 GB.
 
+## 2026-10-19/20
+
+- **The block rate swung both ways on 10-19 (measured).**
+  - **Faster:** from 12:30 to 13:30 UTC, 53 blocks arrived, 1.8× the 2-minute target. Every LAN node logged monerod's warning "There were 72–74 blocks in the last 90 minutes, there might be large hash rate changes".
+  - **Slower:** from 16:30 to 23:10 UTC there were six gaps of more than 10 minutes between blocks. The longest was 19.6 min (19:27–19:46 UTC).
+  - All nodes followed without a reorg. Sources: `ref_block` (`timestamp`, `first_seen`), `chain_event_log`, and the monerod log.
+- **The transaction load stopped at about 00:28 UTC on 10-20 (measured).**
+  - **Before the stop:** the load was already light. The hub's ZMQ feed (from `ref-a` and `op-g6950-hdd`) received about 96 unique transactions per 10 minutes from 23:30 to 00:20 UTC.
+  - **The stop:** the hub received its last transaction at 00:27:55, and `ref-a` logged its last txpool line at 00:27:54. Block 3,113,397 (00:29:30, 51 transactions) is the last with transactions. The 28 blocks since then, 3,113,398–3,113,425 (to 01:17 UTC), carry only the coinbase.
+  - **It's network-wide:** at 01:20 UTC `tx_pool_size` was 0 on `ref-a` and on the internet-facing `ref-b`, which has about 30 internet peers. Our nodes don't mine, so outside miners were producing empty blocks too. This is not a relay fault on our side.
+  - **Hypothesis:** the load generator was stopped or paused; the cause isn't known.
+  - Sources: `zmq_tx` (`recv_time`), `ref_block` (`num_txes`), `info` (`tx_pool_size`).
+
 ---
 
 ## Monitor notes
