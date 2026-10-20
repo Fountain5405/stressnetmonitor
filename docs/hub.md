@@ -91,7 +91,7 @@ Evaluated every 5 s; transitions are written to `node_state`. Thresholds are set
 | `WRONG_CHAIN` | past `fork_height` with top block `major_version < min_major_version` |
 | `FORKED` | tip hash differs from the canonical hash at that height for `fork_confirm_s` |
 | `SYNCING` | `busy_syncing` and lag > `syncing_lag` |
-| `STALLED` | height unchanged for `stall_after_s` while the canonical chain advanced |
+| `STALLED` | height unchanged for `stall_after_s`, and the canonical chain passed the node at least `stall_grace_s` before its sample (a network-wide gap between blocks is not a stall) |
 | `FALLING_BEHIND` | lag ≥ `behind_blocks` and growing faster than `falling_slope_per_h` |
 | `BEHIND` | lag ≥ `behind_blocks` |
 | `OK` | otherwise |

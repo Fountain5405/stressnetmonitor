@@ -117,3 +117,26 @@ def test_lag_uses_canonical_height_at_sample_time(tmp_path):
     _feed(mon, node, _info_batch(98, f"{98:064x}", t=now))
     mon.evaluate()
     assert mon.nodes["a"].state == "BEHIND"
+
+
+def test_stalled_needs_network_to_pass_the_node(tmp_path):
+    # A network-wide gap: the node reached 99 eleven minutes ago, then block
+    # 100 arrived 3 s before the node's sample could show it. Not STALLED.
+    from msnm.registry import Node
+    mon, chain = _monitor(tmp_path, canon_height=99)
+    node = Node("a", "operator", "lan", "", 0, None)
+    now = time.time()
+    _feed(mon, node, _info_batch(99, f"{99:064x}", t=now - 10))
+    mon.evaluate()
+    mon.nodes["a"].height_changed_at = now - 700
+    ref = chain.refs["ref"]
+    ref.top_height, ref.hashes[100] = 100, f"{100:064x}"
+    chain.first_seen[(100, f"{100:064x}")] = now - 3
+    _feed(mon, node, _info_batch(99, f"{99:064x}", t=now - 5))
+    mon.evaluate()
+    assert mon.nodes["a"].state == "OK"
+    # Block 100 appeared 300 s ago and the node is still at 99: STALLED.
+    chain.first_seen[(100, f"{100:064x}")] = now - 300
+    _feed(mon, node, _info_batch(99, f"{99:064x}", t=now))
+    mon.evaluate()
+    assert mon.nodes["a"].state == "STALLED"

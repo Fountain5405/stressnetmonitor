@@ -33,6 +33,7 @@ class Thresholds:
     falling_slope_per_h: float = 2.0  # lag growth (blocks/hour) for FALLING_BEHIND
     slope_window_s: float = 1800
     stall_after_s: float = 600        # height unchanged while the network moved
+    stall_grace_s: float = 120        # ...and the network passed the node at least this long before its sample
     syncing_lag: int = 30             # lag above this while busy_syncing: SYNCING
     fork_confirm_s: float = 90        # tip hash must disagree this long: FORKED
 
@@ -73,7 +74,6 @@ class NodeLive:
     lag_hist: deque = field(default_factory=lambda: deque(maxlen=720))
     height: int | None = None
     height_changed_at: float = 0.0
-    canon_height_at_change: int | None = None
     fork_since: float | None = None
     state: str = "UNKNOWN"
     reason: str = ""
@@ -283,7 +283,7 @@ class Monitor:
             return "UNKNOWN", "no get_info yet", None
         h = int(nl.info["height"]) - 1
         if h != nl.height:
-            nl.height, nl.height_changed_at, nl.canon_height_at_change = h, nl.info_time, canon_h
+            nl.height, nl.height_changed_at = h, nl.info_time
         if canon_h is None:
             return "UNKNOWN", "reference chain unavailable", None
         # Lag against the canonical height when the node took this sample, not
@@ -307,7 +307,12 @@ class Monitor:
             nl.fork_since = None
         if (nl.info.get("busy_syncing") or nl.info.get("synchronized") is False) and lag > th.syncing_lag:
             return "SYNCING", f"lag {lag}, busy syncing", lag
-        if (nl.canon_height_at_change is not None and canon_h > nl.canon_height_at_change
+        # The network must have passed the node stall_grace_s before its
+        # sample. Comparing with the current tip flagged every node after a
+        # network-wide gap of over stall_after_s: the next block moved the tip
+        # before the nodes' next sample could show it.
+        passed = self.chain.height_at(nl.info_time - (nl.clock_offset or 0.0) - th.stall_grace_s)
+        if (passed is not None and passed > h
                 and nl.info_time - nl.height_changed_at > th.stall_after_s):
             return "STALLED", f"height {h} unchanged for {int(nl.info_time - nl.height_changed_at)}s", lag
         if lag >= th.behind_blocks:
