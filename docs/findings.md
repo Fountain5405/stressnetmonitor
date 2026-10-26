@@ -447,6 +447,89 @@ The aim is to test whether the drops above also happen with a normal peer set, r
   - **Hypothesis:** the load generator was stopped or paused; the cause isn't known.
   - Sources: `zmq_tx` (`recv_time`), `ref_block` (`num_txes`), `info` (`tx_pool_size`).
 
+## 2026-10-22/24
+
+- **`vol-03`, a 2 vCPU / 2 GB cloud VM, reached the tip after an initial sync of 37 h 22 min, with 12 RPC stalls on the way (measured).**
+  - **The node:** a volunteer's pruned node (`--prune-blockchain`) with internet peers. Its sidecar reports 2 vCPUs (virtualized, with AES-NI and AVX2), 2 GB RAM and a network block volume. A 4 GB swap file appeared at 17:38 UTC on 10-22, 16 minutes after the sidecar's first sample (hypothesis: the operator added it). Source: `node_profile`, `host_sample` (`swap_total_kb`).
+  - **When:** monerod's `start_time` is 10-22 11:45:52 UTC. The hub first saw the node at 17:22:04 UTC, at height 604,496. Its first poll at the tip was at 10-24 01:07:34 UTC (chain height 3,116,297, top block 3,116,296), and the hub marked it OK at 01:08:06. That is 37 h 22 min from monerod's start and 31 h 45 min from the hub's first sample. **Hypothesis:** it started from an empty data dir; the hub can't see before 17:22. All 3,119 polls in the sync carry the same `start_time`, so monerod never restarted. Source: `info` (`height`, `start_time`), `node_state`.
+  - **For comparison:** `op-q6600-ssd` (Core2 Q6600, 3.8 GB, LAN peers only) took 35 h 46 min to a tip about 4,000 blocks lower (see 2026-10-18); `exp-2c2g` (2 vCPUs on one core, 2 GB) took 18 h 15 min to the 10-08 tip; `ref-b` (Ryzen 9 5900XT, unpruned) 5 h 31 min. The last 4,000 blocks carry almost nothing, so the two slow nodes' totals are comparable.
+  - **Where the time went (measured).** The `info` height is the chain length, so each boundary is within one block. Transaction counts and weights come from `ref_block`, which starts at block 3,102,307.
+
+    | Blocks | Wall-clock on `vol-03` | Transactions | Block weight |
+    |---|---|---|---|
+    | 604,496 – 999,999 | 4 h 52 min (10-22 17:22 → 22:14) | — | — |
+    | 1,000,000 – 1,999,999 | 11 h 42 min (→ 10-23 09:56) | — | — |
+    | 2,000,000 – 2,999,999 | 9 h 18 min (→ 19:14) | — | — |
+    | 3,000,000 – 3,102,999 | 1 h 1 min (→ 20:15) | — | — |
+    | 3,103,000 – 3,103,999 (the first spam waves) | 2 h 31 min (→ 22:47) | 556,592 | 4.35 GB |
+    | 3,104,000 – 3,105,424 | 6 min | 4,921 | 0.06 GB |
+    | 3,105,425 – 3,105,440 (16 blocks of ~9.5 MB) | 23 min (22:53 → 23:16) | 1,018 | 0.15 GB |
+    | 3,105,441 – 3,109,901 | 1 h 3 min (→ 10-24 00:20) | 112,395 | 1.04 GB |
+    | 3,109,902 – 3,113,519 | 44 min (→ 01:04), 82 blocks/min | 76,808 | 0.70 GB |
+    | 3,113,520 – 3,116,296 (nearly empty) | 3 min (→ 01:07), about 800 blocks/min | 42 | 0.001 GB |
+
+    The spam-wave thousand took `vol-03` 2 h 31 min against 2 h 23 min on `op-q6600-ssd`.
+  - **RPC stalls (measured):** the hub marked the node `UNRESPONSIVE` 12 times, all on 10-23, for 22.5 min of state time in all. Each mark follows 5 minutes without a `get_info` answer, so the silence was the episode plus 5 min. Ten episodes lasted 0.5–2 min: eight between 07:16 and 13:44 UTC (heights about 1.9–2.3 million, the region that also slowed `op-q6600-ssd` near 1.905 million), and two at 19:24 and 21:02 (around 3 million and in the spam wave). The two longest were 5 min at 22:58:38 and 9 min at 23:08:08 (about 14 min of silence), while it verified the 16 blocks of ~9.5 MB (about 64 transactions and 149 KB per transaction). There were none after 23:17:09. During the late sync, answered `get_info` calls took 0.15–7.1 s; at the tip they take 2–8 ms. Source: `node_state`, `info` (`rpc_response_time`).
+  - **Memory (measured):** the lowest MemAvailable was 11 MB at 10-23 03:39:57, with 2.06 GB of swap in use. During the 9-min stall it fell to 132 MB. 170 of 25,219 samples were under 200 MB. CPU was 71–75% busy (user) with 3.6–5.2% steal through the last tx-bearing hours. At the tip: MemAvailable about 450 MB, about 2.1 GB of swap still in use (it hasn't come back), the CPU 97% idle and block processing 48 ms. Source: `host_sample`, the hub's metrics.
+  - **Database size isn't an ingest measure late in a sync (measured):** `database_size` grew 22–25 MB per minute until 10-24 00:35, then stayed at 13.765 GB from 00:41 to the tip, although about 0.35 GB of block weight and 4,700 blocks were still added. At the tip the LAN's pruned nodes read 13.752–13.764 GB. **Hypothesis:** LMDB reused freed pages, so the file had already reached its final size. Source: `info` (`database_size`).
+  - **Hypothesis:** the long stalls come from memory pressure (2 GB RAM, about 2 GB in swap) on top of the per-transaction verification cost of the largest blocks. The node never crashed or restarted, so 2 vCPU / 2 GB plus swap is enough to finish an initial sync of this chain, but its RPC can go silent for over 10 minutes on full blocks.
+
+## 2026-10-24/26
+
+- **`op-n450-hdd` (Atom N450, 1 core, 950 MB RAM, rotational disk) syncs at about 14,000 blocks an hour and drops its only peer after every 9,999 blocks (measured); the rule held for 66 of 72 intervals.**
+  - **The node:** an Intel Atom N450 at 1.66 GHz (1 core, 2 threads), 973,572 kB RAM, 1.9 GB swap and a rotational 160 GB disk, running a pruned node whose only peer is `ref-b` (an exclusive-node unit). It does the full sync from block 1. Source: `node_profile`.
+  - **Progress (measured):** the first poll was at 2026-10-24 04:13 UTC (chain length 101). At 2026-10-26 10:24 UTC it was at 762,128, which is 14.1k blocks an hour on average over 54 h 11 min. Source: `info` (`height`).
+  - **Hypothesis:** at that rate the remaining 2.36 million blocks need about 7 more days. The other slow nodes were slower in the later, transaction-heavy regions (see 2026-10-22/24), so this is a lower bound.
+  - **For comparison (measured):** `vol-03` (2 vCPUs, 2 GB) covered blocks 604,496–999,999 in 4 h 52 min, about 81k blocks an hour. Over the same region `op-n450-hdd` managed about 13–14k an hour.
+  - **Peer drops (measured):** the log says "We can download nothing from this peer", then "Failed to request missing objects, dropping connection", then "monerod is now disconnected from the network", and monerod reconnects. 73 such events were logged in `log_warning`, from 2026-10-24 04:51 to 2026-10-26 09:52 UTC. Of the 72 intervals between them, 66 were 9,500–10,500 blocks (from the chain length at the nearest 30 s poll, so within about 200 blocks; median 9,999) and 37.9–51.6 min (median 42.0). In the log the exact figures are 9,999 blocks between drops, for example "Synced 734,730" at 08:23:53 and "Synced 744,729" at 09:08:40 UTC on 10-26. The six outside 9,500–10,500 blocks (the first two only by the poll's rounding):
+
+    | Drop (UTC) | Chain length at the drop | Blocks since the previous drop | Minutes since the previous drop |
+    |---|---|---|---|
+    | 10-24 15:17:11 | about 170,600 | 10,599 | 39.7 |
+    | 10-25 08:58:47 | about 420,200 | 9,499 | 43.0 |
+    | 10-25 13:28:55 | about 482,400 | 12,199 | 59.0 |
+    | 10-25 14:52:33 | about 501,200 | 18,799 | 83.6 |
+    | 10-25 17:36:33 | about 533,300 | 22,199 | 116.6 |
+    | 10-25 18:43:04 | about 544,900 | 11,699 | 66.5 |
+
+    The four between 13:28 and 18:43 on 10-25 are the long ones. They fall inside the hours with most of the unresponsive episodes below; whether drops went unlogged there, or the windows really ran longer, is not established.
+  - **Interval in time (measured):** 38.1–40.3 min per 10,000 blocks in the first six hours (about 15.7k blocks an hour), 43.3–46.5 min from 10-26 03:00 to 07:30, 51.6 min at 08:23 UTC and 44.0 min at 09:52.
+  - **Hypothesis:** monerod asks the peer for a chain of up to 10,000 block ids, and when the ids run out it logs "We can download nothing from this peer" (`cryptonote_protocol_handler.inl:2605`) and drops the connection. The drop is therefore a count of blocks, not of time, which fits the data: the interval is 9,999 blocks whether it takes 38 or 52 minutes. It costs a reconnect each time, but the cost per drop was not measured.
+  - **RPC stalls (measured):** the hub marked the node `UNRESPONSIVE` 14 times between 10-24 21:34 and 10-26 08:00 UTC, 34.0 min of state time in all. Each mark follows 5 minutes without a `get_info` answer. The longest flagged stretch was 7.0 min. Source: `node_state`.
+
+    | Date | Episodes (start, UTC; flagged minutes) |
+    |---|---|
+    | 10-24 | 21:34 (3.5) |
+    | 10-25 | 12:46 (3.5), 14:17 (0.5), 15:38 (0.5), 16:07 (2.0), 16:21 (1.5), 16:51 (5.0), 17:48 (2.0), 17:56 (7.0), 20:49 (3.5) |
+    | 10-26 | 03:42 (2.0), 05:42 (0.5), 06:43 (1.0), 08:00 (1.5) |
+
+    None happened from 10-25 20:49 to 10-26 03:42, or from 10-26 08:02 to the end of this note (10:24).
+  - **What it coincides with (measured, two cases):**
+    - The 10-24 21:34 episode came while it verified 219 transaction-carrying blocks (block heights 259,830–260,231, about 20 kB each) at about 1.2 s a block, against about 190 ms for an empty block.
+    - On 10-26 between 07:38 and 08:38 UTC it logged 129 blocks with transactions (726,528–738,129, summed verification time 373 s, longest 4.4 s). That hour's sync rate was 11.8k, against 13.3–13.6k in the neighbouring hours, and the 08:00 episode fell inside it. In the next hour only 15 blocks carried transactions and the rate was back to 13.4k.
+    - A 15-block stretch on 10-25 at about 02:56 (blocks 335,432–335,446) took 1.2–2.8 s per block, 25 s in all, with no outage.
+    - The 10-26 06:43 episode does not fit as cleanly: the 5 min of silence began at about block 712,700, before the first of the following 56 transaction blocks (from 713,160).
+  - **Hypothesis:** on this CPU, transaction verification occupies the only core long enough that `get_info` goes unanswered for minutes. The cause of the other episodes is not established.
+  - **Memory (measured):** MemAvailable stays at 0.4–0.6 GB, with 85–94 MB of swap used. The node never ran out of memory and never restarted.
+  - **Fee-estimate error (measured):** the log shows "Grace blocks invalid In 2021 fee scaling estimate." 40–53 times an hour, 2,539 lines since the sync began, each from the sidecar's `get_fee_estimate` poll. No other node logs it. **Hypothesis:** monerod raises it on every estimate while the node is far behind the chain tip; the cause is not established. It doesn't affect the sync.
+  - **Caveat from the monitor (measured):** in the hourly checks at about 00:18, 01:18, 02:18 and 03:18 UTC on 10-25 the monitor's log scan copied all of this node's logs (about 430 MB) into a RAM disk. That pushed MemAvailable down to 135–159 MB and swapped out 1,436–26,185 pages in each of those half-hours. The scan was changed at the 04:18 check to stream the log instead. No unresponsive episode falls in those four hours. Before 00:18 the scan copied only the live file; the 21:18 check on 10-24 (copy at about 21:21) moved MemAvailable from 572 to 558 MB with no swap-out, and the 21:34 episode came 13 minutes after it. So the sync's rate and stalls up to about 04:18 on 10-25 were measured with some load from the monitor itself, and the later figures were not.
+  - Sources: `info`, `node_state`, `log_warning`, `node_profile`, `host_sample`; the verification times and heights come from monerod's `bitmonero.log` ("Height: N" is block N−1; heights above are the true block heights).
+
+- **`ref-b`'s monerod was killed by the kernel for lack of memory on 10-25 at 14:03:31 UTC (measured), while a local simulation workload ran on the same box.**
+  - **The box:** `ref-b` has a Ryzen 9 5900XT (16 cores, 32 threads), 32 GB RAM and 4 GB swap. It runs the internet-facing, unpruned monerod (about 27 inbound and 3 outbound peers). Source: `node_profile`.
+  - **The load:** four parallel network-simulation runs started on it between 09:07:20 and 09:11:20 UTC (about 58 running processes; load 57–59). Until 12:19 MemAvailable held at 24.9–25.8 GB.
+  - **The kill:** the kernel logged "Out of memory: Killed process … (monerod)" with total-vm 26.5 GB and anon-rss 654 MB. In the 14:00 hour MemAvailable fell to 1.0 GB and SwapFree to 0; that hour swapped in 1,532 MB and out 2,116 MB. Source: kernel journal, `host_sample`.
+  - **The restart:** systemd restarted monerod at 14:04:02 (31 s later; `NRestarts` 1), and the hub showed it `OK` again at 14:04:24. The only outage was the 53 s from the kill to the first good poll. The restarted process holds 0.43 GB of anonymous memory, no swap and 0.85–0.90 GB resident; free swap went from about 0 to 3,783 MiB.
+  - **Before the kill (measured):** monerod held 4.85 GB of anonymous memory plus swap at 12:20 (0.78 GB anonymous, 4.08 GB in swap), unchanged since 10-20 16:30. The swap stayed full even when the box was idle, because the pages never needed to come back. So the kill is a result of the swap being full from earlier workloads, not of monerod growing.
+  - **Hypothesis:** the kernel chose monerod because its anonymous memory plus swap (about 4.9 GB) was larger than any single simulation process, even though its resident size was only 654 MB. Not checked against the kernel's score.
+  - **Implication (hypothesis):** a monitored node on a box that also runs memory-heavy simulations needs headroom in swap, a memory cap on the simulation, or a protected OOM score for monerod. A full node's pages do not come back from swap on their own.
+
+- **A memory squeeze on `ref-a` made block verification take 6.8 s on 10-25 at 04:27 UTC (measured), and the kernel killed a simulation process, not monerod.**
+  - **The sequence (`ref-a`):** four simulation runs had been going since 00:36–00:40 UTC. MemAvailable fell from 6.4 GB at 04:15 to 0.3 GB by 04:25, and SwapFree to 456 MiB. At 04:28:12 the kernel killed one `python` process of the simulation's user (anon-rss 12.46 GB). monerod survived and did not restart (`NRestarts` 0). Source: kernel journal, `host_sample`.
+  - **The cost to monerod (measured):** four consecutive empty blocks took 6.77 s (block 3,117,099, logged 04:27:24, before the kill), 3.13 s (3,117,100, 04:28:28), 0.50 s (3,117,101, 04:30:57) and 92 ms (3,117,102, 04:35:58). The same blocks took 53–60 ms on `op-g6950-hdd` and `op-q6600-ssd`, and a normal `ref-a` block takes about 20 ms. In the log's time breakdown for each of these blocks nearly all the time sits in one field (6,766 of 6,769 ms for the first). Source: monerod's `bitmonero.log` ("Height: N" is block N−1).
+  - **Hypothesis:** the delay was page-cache and swap thrash while memory was exhausted, since the first slow block came before the kill and the later ones eased after it. Not confirmed; the log field was not decoded.
+  - **Later (measured):** from 11:04 on 10-25 `ref-a`'s MemAvailable cycled by about 6 GB (nine release events up to 12:13, then more up to 19:50) and fell to 4.7 GB at 19:45 and to about 2.7 GB at 01:30 on 10-26 with no kill. At 03:13 on 10-26 it jumped from 11.4 to 31.2 GB when the two largest simulation processes ended. These are `ref-a`'s memory figures only; the simulation itself was not examined.
+
 ---
 
 ## Monitor notes
