@@ -492,7 +492,7 @@ The aim is to test whether the drops above also happen with a normal peer set, r
     | 10-25 17:36:33 | about 533,300 | 22,199 | 116.6 |
     | 10-25 18:43:04 | about 544,900 | 11,699 | 66.5 |
 
-    The four between 13:28 and 18:43 on 10-25 are the long ones. They fall inside the hours with most of the unresponsive episodes below; whether drops went unlogged there, or the windows really ran longer, is not established.
+    The four between 13:28 and 18:43 on 10-25 are the long ones. They fall inside the hours with most of the unresponsive episodes below; whether drops went unlogged there, or the windows really ran longer, is not established. *Resolved in 2026-10-26/27:* each of the four came exactly 9,999 blocks after a disconnect of another kind, and the first two were exactly 9,999 blocks apart.
   - **Interval in time (measured):** 38.1–40.3 min per 10,000 blocks in the first six hours (about 15.7k blocks an hour), 43.3–46.5 min from 10-26 03:00 to 07:30, 51.6 min at 08:23 UTC and 44.0 min at 09:52.
   - **Hypothesis:** monerod asks the peer for a chain of up to 10,000 block ids, and when the ids run out it logs "We can download nothing from this peer" (`cryptonote_protocol_handler.inl:2605`) and drops the connection. The drop is therefore a count of blocks, not of time, which fits the data: the interval is 9,999 blocks whether it takes 38 or 52 minutes. It costs a reconnect each time, but the cost per drop was not measured.
   - **RPC stalls (measured):** the hub marked the node `UNRESPONSIVE` 14 times between 10-24 21:34 and 10-26 08:00 UTC, 34.0 min of state time in all. Each mark follows 5 minutes without a `get_info` answer. The longest flagged stretch was 7.0 min. Source: `node_state`.
@@ -529,6 +529,58 @@ The aim is to test whether the drops above also happen with a normal peer set, r
   - **The cost to monerod (measured):** four consecutive empty blocks took 6.77 s (block 3,117,099, logged 04:27:24, before the kill), 3.13 s (3,117,100, 04:28:28), 0.50 s (3,117,101, 04:30:57) and 92 ms (3,117,102, 04:35:58). The same blocks took 53–60 ms on `op-g6950-hdd` and `op-q6600-ssd`, and a normal `ref-a` block takes about 20 ms. In the log's time breakdown for each of these blocks nearly all the time sits in one field (6,766 of 6,769 ms for the first). Source: monerod's `bitmonero.log` ("Height: N" is block N−1).
   - **Hypothesis:** the delay was page-cache and swap thrash while memory was exhausted, since the first slow block came before the kill and the later ones eased after it. Not confirmed; the log field was not decoded.
   - **Later (measured):** from 11:04 on 10-25 `ref-a`'s MemAvailable cycled by about 6 GB (nine release events up to 12:13, then more up to 19:50) and fell to 4.7 GB at 19:45 and to about 2.7 GB at 01:30 on 10-26 with no kill. At 03:13 on 10-26 it jumped from 11.4 to 31.2 GB when the two largest simulation processes ended. These are `ref-a`'s memory figures only; the simulation itself was not examined.
+
+## 2026-10-26/27
+
+- **`op-n450-hdd` drops its only peer exactly 9,999 blocks after it last connected to it (measured: all 95 such drops from 10-24 04:51 to 10-27 10:17 UTC). A disconnect for any other reason restarts the count, and that explains all six outliers in the 2026-10-24/26 entry.**
+  - **The data:** 159 "monerod is now disconnected from the network" warnings in `log_warning`. The height given for each is the last block the node added before it, from `block_timing` (true block heights). monerod's own "Synced N" line at a drop prints the chain length, one more.
+  - **Every gap fits the rule (measured):**
+    - 95 disconnects came exactly 9,999 blocks after the previous disconnect of any kind. These are the "We can download nothing from this peer" drops described on 2026-10-24/26.
+    - 60 came 30–9,354 blocks after the previous one, each within 2 minutes of a failed `COMMAND_TIMED_SYNC` to `ref-b` (`LEVIN_ERROR_CONNECTION_TIMEDOUT`, or `…_DESTROYED`).
+    - 3 had no such failure: 10-24 21:35:42, 10-25 12:44:00 and 10-25 14:03:40 UTC. The first two fall inside `UNRESPONSIVE` episodes.
+    - No gap between disconnects exceeded 9,999 blocks.
+  - **The count restarts at the reconnect (measured):** nine drops came after a disconnect of another kind. Each was exactly 9,999 blocks after that disconnect and 10,199–31,140 blocks after the previous 9,999 drop. Four of them are the long outliers of 2026-10-24/26 (10-25 13:28:55, 14:52:33, 17:36:33 and 18:43:04 UTC), which followed disconnects at 12:44:00, 14:03:40, 16:55:32 and 18:02:31. The other two outliers in that table (10-24 15:17 and 10-25 08:58) were exactly 9,999 blocks apart; the 10,599 and 9,499 there came from rounding to 30 s polls.
+  - **Predicted in advance (measured):** from 10-27 05:38 UTC the hourly checks predicted the next drop from the last reconnect. Five drops in a row came at the predicted block:
+    - 976,020;
+    - 992,070, after a timed-sync disconnect at block 982,071, with no drop at 986,019 where the old count would have put it;
+    - 1,002,069;
+    - 1,012,068;
+    - 1,027,345, after a timed-sync disconnect at block 1,017,346.
+  - **Hypothesis:** each new connection gets one chain of up to 10,000 block ids from its peer (the first is a block the node already has). When it has fetched all of them from its only peer, monerod logs that it can download nothing more (`cryptonote_protocol_handler.inl:2605`) and drops the connection. That makes the drop a count from the connection, not from the previous drop. Not checked in the source.
+  - **Cost:** each drop or timed-sync disconnect costs a reconnect; the time lost per reconnect was not measured.
+
+- **Full-block stretches of pre-fork testnet history slow `op-n450-hdd` from about 14,000 to as few as 598 blocks an hour (measured).** In those stretches its RPC went silent for up to about 35 minutes, and its timed syncs with `ref-b` timed out. Stretches ran 10-26 15:30–18:50 UTC and 10-27 02:40–03:45 UTC.
+  - **Which blocks:** the heavy blocks are heights 0.83–1.03 million, testnet history from long before the stressnet's fork at 3,102,800. So this is the cost of older transaction types on this CPU, not of FCMP++.
+  - **Hour by hour (measured):** a transaction block is one whose cumulative weight exceeds its coinbase weight. Transaction weight is the cumulative weight minus the coinbase weight. "Timeouts" counts timed-sync failures with `LEVIN_ERROR_CONNECTION_TIMEDOUT`.
+
+    | Hour (UTC) | Blocks | Tx blocks | Mean p/t, all blocks | Mean p/t, tx blocks | Mean tx weight per tx block | Timeouts |
+    |---|---|---|---|---|---|---|
+    | 10-26 13h | 13,999 | 262 | 209 ms | 1,090 ms | 19 kB | 0 |
+    | 10-26 14h | 12,398 | 1,092 | 255 ms | 915 ms | 18 kB | 0 |
+    | 10-26 15h | 7,993 | 1,019 | 403 ms | 1,851 ms | 44 kB | 4 |
+    | 10-26 16h | 598 | 579 | 5,798 ms | 5,982 ms | 156 kB | 10 |
+    | 10-26 17h | 1,052 | 959 | 3,197 ms | 3,488 ms | 88 kB | 11 |
+    | 10-26 18h | 2,431 | 573 | 1,402 ms | 5,328 ms | 138 kB | 8 |
+    | 10-26 19h | 13,596 | 655 | 224 ms | 847 ms | 16 kB | 0 |
+    | 10-27 01h | 13,481 | 247 | 225 ms | 1,971 ms | 46 kB | 0 |
+    | 10-27 02h | 8,600 | 421 | 378 ms | 4,010 ms | 103 kB | 2 |
+    | 10-27 03h | 3,172 | 594 | 1,054 ms | 4,747 ms | 125 kB | 5 |
+    | 10-27 04h | 10,494 | 338 | 290 ms | 3,109 ms | 73 kB | 3 |
+    | 10-27 05h | 13,750 | 350 | 222 ms | 1,282 ms | 27 kB | 0 |
+
+    In every other hour from 10-26 12:00 to 10-27 10:00 there were 0–1 timeouts. The 10-26 stretch covered about blocks 832,300–834,800; the 10-27 one about 946,000–947,200, with a 10-minute patch near 955,950 at 04:30.
+  - **Where the time goes (measured):** in the slowest blocks nearly all of the time is in `t_checktx`, the check of transactions that weren't in the pool. During an initial sync none are. Block 1,017,261 (0.59 MB) took 47.7 s, the longest on this node so far, and 46.0 s of it was `t_checktx`. In the heavy hours of both stretches, transaction blocks took 38–39 ms per kB of transaction weight (ratio of the hourly means). Blocks near 1.017 and 1.028 million took 80–135 ms per kB, so size alone doesn't set the cost. **Hypothesis:** the transaction type (ring size, proof type) matters; not checked.
+  - **RPC silence (measured):**
+    - From 10-26 15:39 to 18:50 the hub marked the node `UNRESPONSIVE` 12 times, 139.5 min of state time in all. The longest was 29.5 min, from 15:50:47, which means about 34.5 min without a `get_info` answer.
+    - From 10-27 02:53 to 04:38 there were 6 episodes, 23 min in all.
+    - Between the two stretches there was one, 0.5 min at 10-26 19:42.
+    - Source: `node_state`.
+  - **Memory (measured):** MemAvailable bottomed at 0.44 GB (10-26 16h), against 0.48–0.57 GB in the light hours, with about 110–140 MB of swap in use. The node didn't restart. **Hypothesis:** the stretches are bound by its one CPU core, not by memory; I/O wait was not checked.
+  - **Hypothesis on the timeouts:** while the only core verifies a block, the node doesn't read `ref-b`'s timed-sync reply in time. That is the same pattern as the low-end node on 2026-10-06 ("the replies arrive, but the low-end node doesn't read them in time"). Each timeout costs a disconnect and a reconnect, and restarts the 9,999-block count above.
+  - **Progress (measured):** chain length 762,128 at 10-26 10:24 and 1,031,001 at 10-27 10:30 UTC. That is 268,873 blocks in 24.1 h, 11.2k an hour, against 14.1k an hour before 10-26 10:24. **Hypothesis:** the remaining 2.09 million blocks need at least 7.8 days at that rate. Later regions held more transactions for the other slow nodes (see 2026-10-22/24), so this is still a lower bound.
+  - **Still going at the end of this note:** from 10-27 09:11 UTC, blocks near 1.017 and 1.028 million take 40–48 s each, with two more `UNRESPONSIVE` episodes (09:55, 4.0 min; 10:15, 2.5 min).
+  - **Monitor load (caveat):** each hourly check sends one `get_info` and streams up to about 60 MB of the live log over SSH. At about 03:40 on 10-27 a one-off count read the rotated logs (about 500 MB) at idle I/O priority. The effect on the sync wasn't measured.
+  - Sources: `block_timing` (`block_processing_ms`, `cumulative_weight`, `coinbase_weight`, `breakdown_raw`), `log_warning`, `node_state`, `info` (`height`), `host_sample` (`mem_avail_kb`, `swap_free_kb`).
 
 ---
 
