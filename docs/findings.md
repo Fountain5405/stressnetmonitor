@@ -636,6 +636,23 @@ The aim is to test whether the drops above also happen with a normal peer set, r
   - **The other timed-sync failures are a result of the drop, not its cause (hypothesis):** 19 of the 33 disconnects had a `LEVIN_ERROR_CONNECTION_DESTROYED` timed-sync failure within 2 minutes, the other 13 had none. The connection closing under an in-flight timed sync would explain it; I haven't checked the order of the log lines. A nearby timed-sync failure therefore doesn't tell a reset from a normal drop; the block gap does.
   - **Cost (measured, partly):** after the 15:38:14 drop the node had one outgoing connection again by 15:38:44 and was adding blocks (1,358,460 at 15:40); every drop costs at least that. Time lost across all drops wasn't measured.
 
+## 2026-10-28: own nodes upgraded to stressnet v3.1
+
+- **Upgrade (measured; `info.version`, sidecar timestamps):** between 18:02 and 18:11 UTC all six own nodes moved from `v0.19.0.0-beta.3.0` to `v0.19.0.0-beta.3.1` (release "FCMP++ & Carrot beta stressnet v3.1", 2026-10-26). Each got the release's Linux x64 `monerod`, unchanged unit files, and a plain stop and start. One node at a time, the reference nodes last: op-q6600-ssd, exp-2c2g, op-g6950-hdd, ref-b, op-n450-hdd, ref-a. Volunteer vol-04 had already joined on v3.1 at 16:09; the other volunteers are still on v3.0.
+- **No database migration (measured; bitmonero.log):** every node reopened its existing LMDB and came back at the height it stopped at. Time from stopping monerod to the first RPC answer:
+
+  | node | outage | note |
+  |---|---|---|
+  | op-q6600-ssd | 11 s | |
+  | exp-2c2g | 11 s | |
+  | op-g6950-hdd | 12 s | HDD |
+  | ref-b | 14 s | unpruned |
+  | ref-a | 15 s | |
+  | op-n450-hdd | 3 min 6 s | mid-sync; shutdown 100 s, start to RPC 86 s |
+
+- **Mixed versions follow one chain (measured; `info`):** block 3,119,624 arrived at 18:06 with three own nodes on v3.1 and two on v3.0, and every node accepted it. Blocks after that were accepted with all own nodes on v3.1.
+- **op-n450-hdd's sync-time result now spans two binaries (measured):** it switched from v3.0 to v3.1 near block 1,391,700 (45%). Its initial sync also lost about 3 min of wall-clock to the upgrade. The restart and ref-b's own restart 35 s earlier are both disconnects. Under the 9,999 rule the next "We can download nothing" drop should therefore count from this reconnect (hypothesis, to check against `log_warning`).
+
 ---
 
 ## Monitor notes
