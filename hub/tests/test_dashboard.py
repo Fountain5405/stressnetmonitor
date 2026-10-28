@@ -120,6 +120,10 @@ def test_live_publishes_allow_listed_fields_only(tmp_path):
     assert len(v["id"]) == 4 and v["id"] != live["nodes"][0]["id"]
     assert v["hw"]["cpu"] == "Intel Core 2" and v["sync"] is None
     assert v["mem_used"] is None and not {"mem_total", "mem_avail"} & set(v)   # a share only, no byte counts
+    assert v["mon_mem"] is None
+    mon.nodes["vol-01"].proc.update(rss_bytes=9e8, anon_bytes=4e8, swap_bytes=3e7)
+    v2 = dash.build_live(time.time() + 3)["nodes"][1]
+    assert (v2["mon_mem"], v2["rss"]) == (4.3e8, 9e8)
     mon.nodes["vol-01"].profile = {}
     hist.profiles["vol-01"] = {"cpu_model": "Intel(R) Pentium(R) CPU G6950 @ 2.80GHz"}
     assert dash.build_live(time.time())["nodes"][1]["hw"]["cpu"] == "Intel Westmere"
@@ -142,6 +146,11 @@ def test_history_series(tmp_path):
             {"time": _t(base), "cpu_user": 100, "cpu_idle": 300, **zero, "mem_total_kb": 1000, "mem_avail_kb": 250},
             {"time": _t(base + 20), "cpu_user": 150, "cpu_idle": 350, **zero, "mem_total_kb": 1000, "mem_avail_kb": 400},
         ],
+        "process_info": [
+            {"time": _t(base), "mem_rss": 2e9, "mem_rss_anon": 3e8, "mem_swap": 1e8},
+            {"time": _t(base + 20), "mem_rss": 2e9, "mem_rss_anon": 5e8, "mem_swap": None},
+            {"time": _t(base + 30), "mem_rss": 2e9, "mem_rss_anon": None, "mem_swap": 9e9},   # no anon: skipped
+        ],
         "block_timing": [{"height": 100, "total_ms": 812.5}],
         "block_added": [{"height": 100, "hash": f"{100:064x}", "log_time": _t(seen100 + 1.5)}],
     }, offset=0.5, tip=100)
@@ -158,6 +167,7 @@ def test_history_series(tmp_path):
     k = mins["t"].index(m * 60)
     s = mins["nodes"][pid]
     assert (s["lag"][k], s["pool"][k], s["cpu"][k], s["mem"][k]) == (1, 11, 0.5, 0.75)
+    assert s["mon"][k] == 0.5 and s["mon"][k - 1] is None   # GB, highest in the minute
     assert mins["tx_in"][k] == 8 and mins["tx_in"][k - 1] is None and mins["tx_in"][-1] is None
     assert len(mins["t"]) == 1440 and out["order"] == [pid]
     assert not any(x in json.dumps(out) for x in INTERNAL)
@@ -179,6 +189,8 @@ def test_load_history_from_parquet(tmp_path):
                            "rpc_response_time": 10.0, "error": "no response"})
     sink.add("batch", {"node_id": "n", "time": _t(base + 1), "seq": 1, "clock_offset_s": 0.25})
     sink.add("block_timing", {"node_id": "n", "time": _t(base + 2), "height": 100, "total_ms": 33.0})
+    sink.add("process_info", {"node_id": "n", "time": _t(base + 3), "mem_rss": 9e8, "mem_rss_anon": 4e8,
+                              "mem_swap": 5e7})
     sink.add("block_added", {"node_id": "n", "time": _t(base + 2), "log_time": _t(base + 2.25), "height": 100,
                              "hash": bh})
     for x in range(3):
@@ -193,7 +205,8 @@ def test_load_history_from_parquet(tmp_path):
     assert old.minutes["n"][m][5] == pytest.approx(base + 0.75)   # sampled at base + 1, node clock 0.25 s ahead
     assert old.block_ms["n"][100] == 33.0
     assert [x[1:] for x in old.rpc["n"]] == [(0.004, False), (10.0, True)]
-    assert old.minutes["n"][m][6:] == [10.0, 1]   # slowest get_info in the minute, timeouts
+    # slowest get_info in the minute, timeouts, monerod's private memory (anonymous + swap, not resident)
+    assert old.minutes["n"][m][6:] == [10.0, 1, 4.5e8]
     assert old.accepted["n"][100][1] == pytest.approx(base + 2.0)   # log time less the clock offset
     assert old.tx_in["ref-a"] == {m: 3}
     assert old.profiles["n"]["cpu_model"] == "New"   # the latest, however old

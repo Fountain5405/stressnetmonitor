@@ -216,6 +216,7 @@ class Monitor:
         p = nl.proc
         p["rss_bytes"] = r.get("mem_rss")
         p["swap_bytes"] = r.get("mem_swap")
+        p["anon_bytes"] = r.get("mem_rss_anon")
         p["threads"] = r.get("num_threads")
         p["state_d"] = 1 if r.get("state") == "D" else 0
         if not prev or prev.get("pid") != r.get("pid"):

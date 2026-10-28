@@ -258,8 +258,9 @@
     ["delay", "Delay", "Seconds after a reference first saw the latest block until this node accepted it; below: median of the last 30"],
     ["pool", "Pool", "Transactions in this node's pool; below: its share of the reference's pool"],
     ["cpu", "CPU", "Host CPU busy; below: monerod's own use, in cores"],
-    ["ram", "RAM", "Host memory in use; below: the total"],
+    ["ram", "RAM", "Host memory in use, by every program on the box; below: the total"],
     ["disk", "Disk", "Data disk busy time; below: average I/O latency"],
+    ["mon", "monerod", "monerod's own memory: its private pages plus what it has in swap, which the box has to hold for it; below: its resident memory, which also counts cached pages of the database file"],
   ];
   const BARS = new Set(["cpu", "ram", "disk"]);
   const cards = new Map();
@@ -414,6 +415,7 @@
     bar(c, "ram", n.mem_used);
     setMetric(c, "disk", pct(n.disk_util), ok(n.disk_await_ms) ? fixed(n.disk_await_ms, 1) + " ms I/O" : "");
     bar(c, "disk", n.disk_util);
+    setMetric(c, "mon", bytes(n.mon_mem), ok(n.rss) ? bytes(n.rss) + " resident" : "");
 
     if (n.sync) {
       c.sync.hidden = false;
@@ -651,13 +653,24 @@
     },
     {
       box: "charts-nodes", key: "mem", title: "Memory in use",
-      desc: "Share of the host's RAM in use (highest in each minute).",
+      desc: "Share of the host's RAM in use by every program on the box (highest in each minute).",
       nodes: true,
       data: (H) => [H.minutes.t, ...pick(H.minutes.nodes, H.order, "mem").map((a) => a.map((v) => (v == null ? null : v * 100)))],
       opts: (H) => ({
         scales: { y: { range: [0, 100] } },
         series: [timeSeries, ...nodeSeries(H.order, (v) => Math.round(v) + "%")],
         axes: [xAxis(), yAxis((v) => v + "%", { size: 48 })],
+      }),
+    },
+    {
+      box: "charts-nodes", key: "mon", title: "monerod memory",
+      desc: "monerod's own memory: private pages plus swap, in GB (highest in each minute). Other programs on the box don't count.",
+      nodes: true,
+      data: (H) => [H.minutes.t, ...pick(H.minutes.nodes, H.order, "mon")],
+      opts: (H) => ({
+        scales: { y: { range: (u, lo, hi) => [0, Math.max(0.5, hi == null ? 0.5 : hi) * 1.08] } },
+        series: [timeSeries, ...nodeSeries(H.order, (v) => fixed(v, 2) + " GB")],
+        axes: [xAxis(), yAxis((v) => v + " GB", { size: 58 })],
       }),
     },
   ];

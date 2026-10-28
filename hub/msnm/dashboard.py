@@ -202,6 +202,14 @@ def _mem_used(host: dict) -> float | None:
     return round(1 - avail / total, 3) if total and avail is not None else None
 
 
+def monerod_private(anon, swap) -> float | None:
+    """monerod's own memory: anonymous pages plus what is in swap. Resident
+    memory also counts LMDB's file-backed pages, which are page cache: large
+    on a big box, squeezed out on a small one, while swapped-out pages vanish
+    from it though the box still has to hold them."""
+    return None if anon is None else float(anon) + float(swap or 0)
+
+
 def hardware(profile: dict) -> dict:
     """Public hardware summary from a node's profile, by class only. Allow-list:
     the profile also holds monerod arguments, paths and unit files. And no exact
@@ -255,12 +263,13 @@ def hardware(profile: dict) -> dict:
 
 _CPU = ("cpu_user", "cpu_nice", "cpu_system", "cpu_idle", "cpu_iowait", "cpu_irq", "cpu_softirq", "cpu_steal")
 # fields of a per-minute bucket; HT: when H was sampled; RPC: slowest get_info
-# (seconds, a timeout counts as RPC_TIMEOUT_S); RPC_TO: get_info timeouts
-H, POOL, CPU_SUM, CPU_N, MEM, HT, RPC, RPC_TO = range(8)
+# (seconds, a timeout counts as RPC_TIMEOUT_S); RPC_TO: get_info timeouts;
+# MON: monerod's private memory in bytes (monerod_private)
+H, POOL, CPU_SUM, CPU_N, MEM, HT, RPC, RPC_TO, MON = range(9)
 
 
 def _new_bucket() -> list:
-    return [None, None, 0.0, 0, None, None, None, 0]
+    return [None, None, 0.0, 0, None, None, None, 0, None]
 
 
 _EMPTY = tuple(_new_bucket())
@@ -270,7 +279,8 @@ class History:
     """Chart data for the last 24 h.
 
     Per node: per-minute buckets (latest top height and when it was sampled,
-    pool size, CPU busy, memory in use, slowest get_info), the recent get_info
+    pool size, CPU busy, memory in use, monerod's own memory, slowest
+    get_info), the recent get_info
     response times, and for blocks near the tip each block's processing time
     and when the node accepted it. Node times are moved onto the hub's clock
     with the node's clock offset. Per ZMQ source: transactions entering the
@@ -301,6 +311,8 @@ class History:
                 self._rpc(node_id, r, offset or 0.0, answered=False)
         for r in rows.get("host_sample", []):
             self._host(node_id, r)
+        for r in rows.get("process_info", []):
+            self._proc(node_id, r)
         if tip is None:
             return
         for r in rows.get("block_timing", []):
@@ -387,6 +399,14 @@ class History:
             b[CPU_SUM] += 1 - (d["cpu_idle"] + d["cpu_iowait"]) / total_d
             b[CPU_N] += 1
 
+    def _proc(self, node_id: str, r: dict) -> None:
+        if r.get("time") is None:
+            return
+        v = monerod_private(r.get("mem_rss_anon"), r.get("mem_swap"))
+        if v is not None:
+            b = self._bucket(node_id, _ts(r["time"]))
+            b[MON] = v if b[MON] is None else max(b[MON], v)
+
     def _timing(self, node_id: str, r: dict, tip: int) -> None:
         h = r.get("height")
         if h is not None and h >= tip - BLOCK_KEEP and r.get("total_ms") is not None:
@@ -408,7 +428,7 @@ class History:
                     continue
                 if ob[HT] is not None and (b[HT] is None or ob[HT] > b[HT]):
                     b[H], b[HT] = ob[H], ob[HT]
-                for i in (POOL, MEM, RPC):
+                for i in (POOL, MEM, RPC, MON):
                     if ob[i] is not None:
                         b[i] = ob[i] if b[i] is None else max(b[i], ob[i])
                 b[CPU_SUM] += ob[CPU_SUM]
@@ -545,6 +565,10 @@ def load_history(parquet_root: str, until: float, window_s: float = WINDOW_S) ->
     if t is not None and t.num_rows:
         for r in _rows(t.sort_by([("node_id", "ascending"), ("time", "ascending")])):
             hist._host(r["node_id"], r)
+
+    t = _parquet_rows(parquet_root, "process_info", ["node_id", "time", "mem_rss_anon", "mem_swap"], lo, hi)
+    for r in _rows(t):
+        hist._proc(r["node_id"], r)
 
     if tip is not None:
         near_tip = pc.field("height") >= tip - BLOCK_KEEP
@@ -807,6 +831,7 @@ class Dashboard:
             "steal": _num(host.get("cpu_steal_ratio"), 3),
             "mcpu": _num(proc.get("cpu_cores"), 2),
             "rss": _num(proc.get("rss_bytes")),
+            "mon_mem": _num(monerod_private(proc.get("anon_bytes"), proc.get("swap_bytes"))),
             # a share, not bytes: the exact total identifies a machine (hw.ram_gb is the rounded size)
             "mem_used": _mem_used(host),
             "swap_used": _num(host.get("swap_used_bytes")),
@@ -860,7 +885,7 @@ class Dashboard:
         series = {}
         for nid in order:
             d = hist.minutes.get(nid, {})
-            s = {"lag": [], "pool": [], "cpu": [], "mem": [], "rpc": []}
+            s = {"lag": [], "pool": [], "cpu": [], "mem": [], "mon": [], "rpc": []}
             for m in mins:
                 b = d.get(m) or _EMPTY
                 ch = canon_at(b[HT]) if b[HT] is not None else None
@@ -868,6 +893,7 @@ class Dashboard:
                 s["pool"].append(b[POOL])
                 s["cpu"].append(_num(b[CPU_SUM] / b[CPU_N], 3) if b[CPU_N] else None)
                 s["mem"].append(_num(b[MEM], 3))
+                s["mon"].append(_num(b[MON] / 1e9, 3) if b[MON] is not None else None)   # GB
                 s["rpc"].append(_num(b[RPC] * 1000, 2) if b[RPC] is not None else None)   # ms
             series[ids[nid]] = s
 
