@@ -582,6 +582,60 @@ The aim is to test whether the drops above also happen with a normal peer set, r
   - **Monitor load (caveat):** each hourly check sends one `get_info` and streams up to about 60 MB of the live log over SSH. At about 03:40 on 10-27 a one-off count read the rotated logs (about 500 MB) at idle I/O priority. The effect on the sync wasn't measured.
   - Sources: `block_timing` (`block_processing_ms`, `cumulative_weight`, `coinbase_weight`, `breakdown_raw`), `log_warning`, `node_state`, `info` (`height`), `host_sample` (`mem_avail_kb`, `swap_free_kb`).
 
+## 2026-10-27/28
+
+- **A full difficulty recalculation stopped three nodes, and a hard-disk node for 9 min 24 s (measured). It happened once, on 10-27, and hasn't repeated.**
+  - **What happened:** monerod logged "Recalculating difficulties from height 0 to height N" (`blockchain.cpp:1070`, on a P2P thread) on three of the synchronized nodes whose logs I can read, within 12 minutes. It then logged nothing until the recalculation finished:
+
+    | Node | Storage | Started (UTC, 10-27) | Chain length N | Log resumed | Silent for |
+    |---|---|---|---|---|---|
+    | `op-g6950-hdd` | rotational HDD | 11:07:37 | 3,118,754 | 11:17:01 | 9 min 24 s |
+    | `op-q6600-ssd` | SATA SSD | 11:17:54 | 3,118,756 | 11:19:35 | about 1.7 min |
+    | `exp-2c2g` | virtual disk on a SATA SSD | 11:19:11 | 3,118,756 | 11:21:17 | about 2.1 min |
+
+    The line is INFO level, so it isn't in Parquet; I read it from each node's `bitmonero.log`. It did not appear on `ref-a` (log read from 10-26 12:00), on `ref-b` (from 10-20) or on any node since 11:20 on 10-27, up to 15:42 on 10-28 (searched at each hourly check, and in one pass for 03:30–15:42 on 10-28). `op-n450-hdd` wasn't at the tip.
+  - **Cost on the HDD node (measured):**
+    - every one of its 19 `get_info` polls from 11:07:42 to 11:16:42 got no answer, and the hub marked it `UNRESPONSIVE` from 11:12:13 to 11:17:43 (`node_state`, `rpc_error`);
+    - I/O wait was 42–44% on its 2 cores, with 2,100–3,700 major page faults per 20 s; MemAvailable stayed at about 3.0 GB, and monerod's resident memory went from 2.43 to 2.56 GB (`host_sample`, `process_info`);
+    - block 3,118,755, which the references added at 11:08:19, reached it at 11:17:01, **8 min 42 s late**;
+    - right after, its only connection (to `ref-a`) closed with `COMMAND_TIMED_SYNC` failing both ways (`LEVIN_ERROR_CONNECTION_DESTROYED`) and was re-established within a second. Between 11:10 and 11:16 `ref-a` had refused the node's new connection attempts as "too many connections from the same address".
+  - **No fork (measured):** `chain_event_log` has no alternative block or reorganisation from 10:50 to 11:30. The references saw blocks 3,118,754, 3,118,755 and 3,118,756 at 11:06:59, 11:08:19 and 11:13:56, each with one hash on every node.
+  - **Cost on the other two (measured):** neither SSD-backed node was marked unresponsive.
+  - **Hypotheses (not checked):**
+    - What triggers it is unknown. Three nodes did it within 12 minutes on P2P threads, and two did it at the same chain length, so a P2P message is the first suspect. I have not read the source.
+    - The HDD node paid about five times as long as the SSD-backed ones, which fits a disk-bound walk over the whole header chain, but I did not compare the nodes' I/O wait.
+  - **Why it matters for the minimum-hardware question:** during the stall a slow-disk node is deaf to RPC and to new blocks for several minutes with no fault on its side. On a node that serves wallets or mining this looks like an outage.
+
+- **`op-n450-hdd`: `get_info` is slow for the whole sync, and empty blocks got 44% slower for almost 24 hours, then recovered at the moment its monerod grew by half a gigabyte (measured; the cause is not known).** Sources: `block_timing`, `info` (`rpc_response_time`), `rpc_error`, `node_state`, `process_info`, `host_sample`. An empty block is one whose cumulative weight equals its coinbase weight.
+  - **Three stretches (measured):**
+
+    | Stretch (UTC) | Chain length | Mean time per empty block | Blocks per hour | `get_info` polls answered | `UNRESPONSIVE` |
+    |---|---|---|---|---|---|
+    | A: 10-26 20:00 – 10-27 02:00 | 850,000–937,000 | 191–194 ms | 14,530 | 43% (313 of 720) | none |
+    | B: 10-27 13:00 – 10-28 12:00 | about 1,056,000 – about 1,309,000 | 262–293 ms, mostly 274–287 ms | 10,659 | 31% (868 of 2,760) | 84 episodes, 183.6 min of state time in 23 h |
+    | C: 10-28 13:00 – 16:00 | 1,320,000 and up | 196–207 ms | 14,199 | 43% (156 of 360) | 1 episode, 1.0 min in 3 h |
+
+    - **Onset of B:** the 10-minute mean was 191 ms at 12:20 on 10-27 and 262 ms at 12:30, at chain length about 1,055,000–1,057,000.
+    - **End of B:** the 5-minute mean was 279 ms at 12:05 on 10-28 and 207 ms at 12:10.
+    - **Not the load of my own checks:** no hourly check ran between 03:41 and 15:34 on 10-28 (the session was logged out), so there was no SSH or log read on this node, yet 28 `UNRESPONSIVE` episodes occurred from 03:49 to 12:04 and B ended at 12:10. The onset at 12:20–12:30 on 10-27 also doesn't line up with the checks, which ran at :38.
+    - **Blocks per hour:** the rate is about the same in A and C, so B cost about a quarter of the sync speed (about 3,900 blocks an hour) for about 23.7 hours.
+  - **`get_info` is slow throughout (measured):** even in A, 57% of the hub's 30 s `get_info` polls failed, and the answered ones took a median of 4.6–5.1 s (the sidecar gives up after 10 s, which is what the `rpc_error` rows are). B differs from A and C in the 5-minute silences, not in the median.
+  - **The slowness follows the sync, not the call (measured):** `get_info` is a cheap call. My probes answered in 0.003 s at 01:42 and 15:38:21 on 10-28, both while the node was disconnected after a 9,999-block drop (see below), and took 12.7 s (03:41), 14.5 s (15:42) and, once, more than 20 s (02:41) while it was syncing. Host CPU (user plus system) was 84–95% in every hour; I/O wait was 1–7%.
+  - **Hypothesis:** block processing holds a lock that the RPC handler needs, and the one core is saturated, so the RPC call waits until the sync thread lets go. The 0.003 s answers while disconnected fit that, but I haven't read the code or tested it by pausing the sync.
+  - **A 520 MB allocation at the end of B (measured):** at 12:09:53 on 10-28 monerod's anonymous resident memory was 99 MB. At 12:10:18 it was 564 MB, its virtual size grew from 2,963 to 3,483 MB, and its file-backed (database) resident memory fell from 114 MB to 9 MB (`process_info`). MemAvailable went from 567 MB to 70 MB (`host_sample`) and has stayed under 125 MB (hourly minimum 56–71 MB); swap use didn't change (about 110 MB in monerod). Same process, same start time, no restart. The empty-block time fell in the same 5-minute window.
+  - **The onset of B has no such step (measured):** around 10-27 12:20–12:30 the thread count (27), virtual size (2,963 MB) and peak resident size (546 MB) of monerod didn't change.
+  - **Hypothesis:** a memory-hungry code path in monerod (a cache or a batch buffer; I haven't checked which) switched on at 12:10 and made empty blocks cheaper, and its absence or a different path accounts for B. The timing only shows that the two events coincide, not that one caused the other. The log at the default level has no line between 12:09:30 and 12:10:30 other than the per-block ones.
+  - **For the minimum-hardware question (measured, 3.5 h only):** since 12:10 the node has had under 125 MB of MemAvailable and has synced at its fastest rate since 10-27 (about 14.2k blocks an hour), with no out-of-memory kill in the kernel journal since 10-27 10:00. Whether that holds as blocks get heavier is not known.
+  - **Progress (measured):** chain length 1,031,001 at 10-27 10:30 and 1,357,561 at 10-28 15:35, which is 326,560 blocks in 29.1 h, or 11.2k an hour overall. **Hypothesis:** the remaining 1.76 million blocks need at least 6.5 days at that rate; it is a lower bound for the reason given on 2026-10-24/26.
+
+- **The 9,999-block rule held for 32 of the next 33 disconnects, and the one exception restarted the count (measured; updates 2026-10-26/27).**
+  - **The data:** every "monerod is now disconnected from the network" warning on `op-n450-hdd` from 10-27 10:17:19 to 10-28 15:38:14 UTC (`log_warning`), with the last block added before each from `block_timing` (true heights).
+  - **32 of the 33 came exactly 9,999 blocks after the previous one.** After the disconnect at block 1,028,545 (10-27 10:17:19), the drops fell at 1,038,544, 1,048,543, 1,058,542 and so on, each 9,999 higher than the last. The latest is at block 1,357,959 (10-28 15:38:14).
+  - **The exception restarted the count (measured):** the disconnect at 10-27 20:06:39 came at block 1,137,981, after 9,446 blocks. It followed the only `COMMAND_TIMED_SYNC` *timeout* (`LEVIN_ERROR_CONNECTION_TIMEDOUT`, at 20:06:14) in these 29.7 hours, during an `UNRESPONSIVE` episode. The next drop was exactly 9,999 blocks after it, at 1,147,980. The 22 drops since then (the first at 1,147,980) each followed the previous by exactly 9,999: 1,357,959 = 1,137,981 + 22 × 9,999.
+  - **Timeouts are now rare (measured):** only 1 `LEVIN_ERROR_CONNECTION_TIMEDOUT` in this period, against 2–11 an hour during the heavy stretches of 10-26 and 10-27. So, unlike 2026-10-26/27, the 84 `UNRESPONSIVE` episodes above almost never came with a timed-sync timeout; only the 20:06 one broke the count.
+  - **The other timed-sync failures are a result of the drop, not its cause (hypothesis):** 19 of the 33 disconnects had a `LEVIN_ERROR_CONNECTION_DESTROYED` timed-sync failure within 2 minutes, the other 13 had none. The connection closing under an in-flight timed sync would explain it; I haven't checked the order of the log lines. A nearby timed-sync failure therefore doesn't tell a reset from a normal drop; the block gap does.
+  - **Cost (measured, partly):** after the 15:38:14 drop the node had one outgoing connection again by 15:38:44 and was adding blocks (1,358,460 at 15:40); every drop costs at least that. Time lost across all drops wasn't measured.
+
 ---
 
 ## Monitor notes
