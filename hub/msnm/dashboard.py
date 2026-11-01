@@ -242,12 +242,17 @@ def hardware(profile: dict) -> dict:
         cpu = f"{maker} CPU" if maker else ""
     swap = _int(profile.get("swap_total_kb"))
     swap_gib = swap / 2**20 if swap is not None else None
+    cores, threads = _int(profile.get("cpu_physical_cores")), _int(profile.get("cpu_logical"))
+    # sidecars before 0.1.7 count cores from /proc/cpuinfo's core ids, which ARM kernels
+    # don't write, so they report 0; those boards have no SMT, so cores = threads
+    if not cores and threads:
+        cores = threads
     return {
         "cpu": clean(cpu, 60),
         "segment": None if virtual else cpudb.segment(model),
         "era": None if virtual or not spec else cpudb.era(spec.year),
-        "cores": _int(profile.get("cpu_physical_cores")),
-        "threads": _int(profile.get("cpu_logical")),
+        "cores": cores,
+        "threads": threads,
         "ram_gb": ram_class(_int(profile.get("mem_total_kb"))),
         "swap_gb": None if swap_gib is None else float(round(swap_gib) if swap_gib >= 4 else round(swap_gib * 2) / 2),
         "vm": vm,

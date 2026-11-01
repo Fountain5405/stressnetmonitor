@@ -19,7 +19,7 @@
 set -u
 export LC_ALL=C   # EPOCHREALTIME and numbers must use '.' as decimal point
 
-SIDECAR_VERSION="0.1.6"
+SIDECAR_VERSION="0.1.7"
 
 # ----------------------------------------------------------------- config ---
 
@@ -383,6 +383,13 @@ emit_profile() {
       flags|Features) [[ -z $flags ]] && flags=" $v " ;;
     esac
   done < /proc/cpuinfo
+  # ARM kernels write no core ids to /proc/cpuinfo: count each core's set of sibling threads instead
+  if ((${#cores[@]} == 0)); then
+    local tdir sib
+    for tdir in /sys/devices/system/cpu/cpu[0-9]*/topology; do
+      { read -r sib < "$tdir/core_cpus_list" || read -r sib < "$tdir/thread_siblings_list"; } 2>/dev/null && cores["$sib"]=1
+    done
+  fi
   rec P "$t" cpu_model "$model"
   rec P "$t" cpu_logical "$logical"
   rec P "$t" cpu_physical_cores "${#cores[@]}"

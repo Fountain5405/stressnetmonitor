@@ -95,6 +95,10 @@ def test_hardware_by_class_only():
     # a model the table doesn't know: only its maker
     assert (hardware({"cpu_model": "Intel(R) Future CPU 9999X"})["cpu"], hardware({"arch": "aarch64"})["cpu"]) == (
         "Intel CPU", "Arm CPU")
+    # sidecars before 0.1.7 report 0 cores on ARM (no core ids in /proc/cpuinfo): show the threads
+    arm = hardware({"arch": "aarch64", "cpu_physical_cores": "0", "cpu_logical": "6"})
+    assert (arm["cores"], arm["threads"]) == (6, 6)
+    assert hardware({})["cores"] is None and hardware({})["threads"] is None
     assert hardware({})["isa"] == [] and hardware({})["cpu"] == ""
     assert hardware({"cpu_model": "<script>alert(1)</script>"})["cpu"] == ""
     assert [ram_class(kb) for kb in (None, 2027024, 3804536, 32798812, 1600 * 2**20)] == [None, 2, 4, 32, 1792]
