@@ -167,6 +167,7 @@ class Monitor:
     def _host(self, nl: NodeLive, r: dict) -> None:
         prev, nl.host_prev = nl.host_prev, r
         h = nl.host
+        h["cpu_temp_c"] = r.get("cpu_temp_c")
         h["mem_avail_bytes"] = (r.get("mem_avail_kb") or 0) * 1024
         h["mem_total_bytes"] = (r.get("mem_total_kb") or 0) * 1024
         if r.get("swap_total_kb") is not None and r.get("swap_free_kb") is not None:

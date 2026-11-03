@@ -464,6 +464,52 @@ emit_profile() {
 
 # ----------------------------------------------------------- host sampling ---
 
+# Read CPU sensors only: unrelated disk/GPU/board sensors must not become the
+# CPU temperature. Prefer CPU thermal zones (including Rockchip's cpu-thermal),
+# then known CPU hwmon drivers. Report the hottest valid reading in millidegrees
+# Celsius; missing sensors are normal on VPSes. No extra programs or privileges.
+cpu_temperature() {
+  local root=${1:-/sys} dir kind input label value hottest="" source
+  local -a inputs=()
+  for source in thermal hwmon; do
+    inputs=()
+    if [[ $source == thermal ]]; then
+      for dir in "$root"/class/thermal/thermal_zone*; do
+        [[ -r $dir/type ]] || continue
+        read -r kind < "$dir/type" || continue
+        case $kind in
+          cpu-thermal|cpu_thermal|cpu[0-9]*-thermal|cpu[0-9]*_thermal|x86_pkg_temp)
+            inputs+=("$dir/temp") ;;
+        esac
+      done
+    else
+      for dir in "$root"/class/hwmon/hwmon*; do
+        [[ -r $dir/name ]] || continue
+        read -r kind < "$dir/name" || continue
+        case $kind in coretemp|k10temp|zenpower) ;; *) continue ;; esac
+        for input in "$dir"/temp[0-9]*_input; do
+          # AMD Tctl can include a cooling-control offset; use die/CCD readings.
+          if [[ $kind != coretemp ]]; then
+            [[ -r ${input%_input}_label ]] || continue
+            read -r label < "${input%_input}_label" || continue
+            case $label in Tdie|Tccd[0-9]*) ;; *) continue ;; esac
+          fi
+          inputs+=("$input")
+        done
+      done
+    fi
+    for input in "${inputs[@]}"; do
+      [[ -r $input ]] || continue
+      { read -r value < "$input"; } 2>/dev/null || continue
+      [[ $value =~ ^-?(0|[1-9][0-9]{0,5})$ ]] || continue
+      ((value >= -40000 && value <= 150000)) || continue
+      if [[ -z $hottest ]] || ((value > hottest)); then hottest=$value; fi
+    done
+    if [[ -n $hottest ]]; then printf '%s\n' "$hottest"; return 0; fi
+  done
+  return 1
+}
+
 sample_host() {
   local k a b c d e f g h i line out
   now
@@ -516,6 +562,8 @@ sample_host() {
       done < "/proc/pressure/$k"
     done
   fi
+  local temp
+  if temp=$(cpu_temperature); then out+=" cpu_temp_mc=$temp"; fi
   rec S "$NOW" "$out"
 }
 

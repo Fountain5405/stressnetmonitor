@@ -113,6 +113,7 @@ SCHEMAS: dict[str, pa.Schema] = {
         *_NODE,
         ("cpu_user", F64), ("cpu_nice", F64), ("cpu_system", F64), ("cpu_idle", F64),
         ("cpu_iowait", F64), ("cpu_irq", F64), ("cpu_softirq", F64), ("cpu_steal", F64),
+        ("cpu_temp_c", F64),
         ("ctxt", F64), ("procs_running", I32), ("procs_blocked", I32),
         ("mem_total_kb", F64), ("mem_free_kb", F64), ("mem_avail_kb", F64),
         ("buffers_kb", F64), ("cached_kb", F64), ("dirty_kb", F64), ("writeback_kb", F64),
