@@ -359,6 +359,30 @@ resolve_disk() {
   fi
 }
 
+# ARM /proc/cpuinfo often omits physical id/core id. Each distinct sibling
+# list identifies one core, including on SMT systems and across CPU clusters.
+# Count online CPUs only, as /proc/cpuinfo does. Fail rather than report a
+# partial count if topology is unavailable for any online CPU.
+sysfs_physical_cores() {
+  local root=${1:-/sys/devices/system/cpu} cpu online siblings seen=0
+  local -A groups=()
+  for cpu in "$root"/cpu[0-9]*; do
+    [[ -d $cpu ]] || continue
+    if [[ -e $cpu/online ]]; then
+      read -r online < "$cpu/online" || return 1
+      [[ $online == 0 ]] && continue
+      [[ $online == 1 ]] || return 1
+    fi
+    [[ -r $cpu/topology/thread_siblings_list ]] || return 1
+    read -r siblings < "$cpu/topology/thread_siblings_list" || return 1
+    [[ $siblings =~ ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$ ]] || return 1
+    groups["$siblings"]=1
+    ((seen += 1))
+  done
+  ((seen > 0)) || return 1
+  printf '%s\n' "${#groups[@]}"
+}
+
 emit_profile() {
   now
   local t=$NOW v k line model="" logical=0 flags="" hyper=no
@@ -385,7 +409,11 @@ emit_profile() {
   done < /proc/cpuinfo
   rec P "$t" cpu_model "$model"
   rec P "$t" cpu_logical "$logical"
-  rec P "$t" cpu_physical_cores "${#cores[@]}"
+  local physical_cores=${#cores[@]}
+  if ((physical_cores == 0)); then
+    physical_cores=$(sysfs_physical_cores) || physical_cores=0
+  fi
+  rec P "$t" cpu_physical_cores "$physical_cores"
   [[ $flags == *" hypervisor "* ]] && hyper=yes
   rec P "$t" virtualized "$hyper"
   local fl sel="" flag_list="ssse3 sse4_1 sse4_2 aes avx avx2 avx512f sha_ni bmi2 adx asimd sha2 pmull"
