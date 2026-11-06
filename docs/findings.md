@@ -584,7 +584,7 @@ The aim is to test whether the drops above also happen with a normal peer set, r
 
 ## 2026-10-27/28
 
-- **A full difficulty recalculation stopped three nodes, and a hard-disk node for 9 min 24 s (measured). It happened once, on 10-27, and hasn't repeated.**
+- **A full difficulty recalculation stopped three nodes, and a hard-disk node for 9 min 24 s (measured). It happened on 10-27 and again on 11-04 (see 2026-11-04).**
   - **What happened:** monerod logged "Recalculating difficulties from height 0 to height N" (`blockchain.cpp:1070`, on a P2P thread) on three of the synchronized nodes whose logs I can read, within 12 minutes. It then logged nothing until the recalculation finished:
 
     | Node | Storage | Started (UTC, 10-27) | Chain length N | Log resumed | Silent for |
@@ -652,6 +652,145 @@ The aim is to test whether the drops above also happen with a normal peer set, r
 
 - **Mixed versions follow one chain (measured; `info`):** block 3,119,624 arrived at 18:06 with three own nodes on v3.1 and two on v3.0, and every node accepted it. Blocks after that were accepted with all own nodes on v3.1.
 - **op-n450-hdd's sync-time result now spans two binaries (measured):** it switched from v3.0 to v3.1 near block 1,391,700 (45%). Its initial sync also lost about 3 min of wall-clock to the upgrade. The restart and ref-b's own restart 35 s earlier are both disconnects. Under the 9,999 rule the next "We can download nothing" drop should therefore count from this reconnect (hypothesis, to check against `log_warning`).
+
+## 2026-10-28/30
+
+- **`vol-04`, a 6-core ARM single-board computer with 4 GB RAM, reached the tip 62 h 18 min after monerod started (measured).** The FCMP++ part of the chain, from the fork to the tip, took 5 h 52 min. The pre-fork full-block stretch near 1.91 million took 3 h 17 min.
+  - **The node:** a volunteer's node with internet peers. Its sidecar reports:
+    - 6 aarch64 cores with AES and SHA2 extensions (the reported 1.42 GHz maximum is probably the small cores' clock: hypothesis);
+    - 3.9 GB RAM and 1.9 GB swap;
+    - one 480 GB disk on ext4. The kernel reports the disk as rotational, and monerod logged its "blockchain is on a rotating drive" warning at each start.
+
+    Source: `node_profile`, `log_warning`.
+  - **When:**
+    - monerod's `start_time` is 10-27 21:55:34 UTC.
+    - The hub first saw the node at 10-28 16:09:52, at chain length 1,063,174 with a 2.57 GB database.
+    - Its first poll reporting `synchronized` was at 10-30 12:14:02 (chain length 3,120,892), and the hub marked it OK at 12:14:35.
+    - That is 62 h 18 min from monerod's start and 44 h 4 min from the hub's first sample. **Hypothesis:** it started from an empty data dir. Its first sample already showed about 79 h of user CPU time, which fits 18 h of syncing on 6 cores.
+
+    Sources: `info`, `node_state`, `process_info`.
+  - **Where the time went (measured).**
+    - Boundaries come from the node's own log (`block_timing`, where `Height: N` is block N−1), so each one is exact to the block.
+    - Transaction counts and weights for these blocks are in the `vol-03` entry (2026-10-22/24); they are properties of the chain.
+    - The `vol-03` column is from that entry. Its first row covers 1,000,000–1,999,999.
+
+    | Blocks | Wall-clock on `vol-04` | `vol-03` |
+    |---|---|---|
+    | 1,063,174 – 1,999,999 | 18 h 39 min (10-28 16:10 → 10-29 10:49) | 11 h 42 min |
+    | 2,000,000 – 2,999,999 | 18 h 0 min (→ 10-30 04:50) | 9 h 18 min |
+    | 3,000,000 – 3,102,799 | 1 h 32 min (→ 06:22) | 1 h 1 min, to 3,102,999 |
+    | 3,102,800 – 3,102,999 (the first post-fork blocks) | 5 min | |
+    | 3,103,000 – 3,103,999 (the first spam waves) | 2 h 45 min (→ 09:12) | 2 h 31 min |
+    | 3,104,000 – 3,105,424 | 9 min | 6 min |
+    | 3,105,425 – 3,105,440 (16 blocks of ~9.5 MB) | 34 min (09:22 → 09:56) | 23 min |
+    | 3,105,441 – 3,109,901 | 1 h 14 min (→ 11:11) | 1 h 3 min |
+    | 3,109,902 – 3,113,519 | 54 min (→ 12:06) | 44 min |
+    | 3,113,520 – 3,120,890 (nearly empty) | 8 min (→ 12:14) | 3 min, to 3,116,296 |
+
+    On the FCMP++ part, `vol-04` was 10–50% slower than `vol-03`. On the pre-fork rows it was about twice as slow, but most of that gap is interruptions and peers (below), not block cost.
+  - **What a block costs (measured; `block_timing`):**
+    - **Blocks 3,103,000–3,103,999** (mean weight 4.34 MB): mean `p/t` 9.1 s, of which `t3` was 8.8 s (verifying transactions it hadn't seen). The worst was 121 s for block 3,103,105 (9.02 MB).
+    - **The 16 blocks 3,105,425–3,105,440** (mean 8.88 MB): **mean 129 s each, longer than the 120 s block target**. `t3` was 128.7 s of it. The worst was 152 s for block 3,105,428 (9.94 MB).
+    - **Blocks 3,105,441–3,109,901** (mean 0.23 MB): 0.87 s each.
+    - **The pre-fork stretch, blocks 1,912,800–1,922,999** (mean 0.12 MB, older transaction types): 0.88 s each. Here the largest stage was `t_checktx` (0.66 s), not `t3`, and the worst block took 3.9 s. It took 3 h 17 min (10-29 05:58 → 09:15, from `info`).
+    - **Reading:** during a sync every block carries unseen transactions, so these are worst-case costs. At the tip most transactions arrive through the pool first. Whether this board keeps up with sustained ~9.5 MB blocks at the tip is untested.
+  - **Interruptions (measured; `sidecar_event`, `node_profile.boot_id`, `node_state`):**
+    - **10-29 18:41–19:47:** monerod exited at 18:41:47 (chain length about 2.47 million). The host then booted three times in 8 minutes (new `boot_id` at 18:42:55, 18:48:51 and 18:50:59). monerod was back for good at 19:47:48, 66 min after it stopped.
+    - **10-30 01:24–01:39:** seven monerod processes in 15 min, each exiting after 45–80 s, with no reboot (chain length about 2.67 million). The collected warnings show only the rotating-drive warning at each start and "monerod is now disconnected from the network"; the cause isn't visible.
+    - **10-30 10:00–10:05:** another reboot (new `boot_id` at 10:00:27), 5 min.
+    - Together these cost about 1 h 26 min. **Hypothesis:** the reboots were the operator's, not crashes; we haven't asked.
+  - **Peers limited the pre-fork speed (measured; hypothesis for the cause):**
+    - On light blocks (25–35 ms each) the node synced about 95,000 blocks an hour with a median 6 outbound peers (10-30 02:22–06:20).
+    - From 10-29 19:48 to 10-30 02:20 it had a median of 2 outbound peers (sometimes 0) and managed about 37,000 an hour. Blocks 2,600,000–2,699,999 alone took 3.8 h.
+    - **Hypothesis:** with that few peers the sync was limited by download, not CPU. `info` (`outgoing_connections_count`, `height`), `block_timing`.
+  - **RPC stalls (measured):** the hub marked the node `UNRESPONSIVE` 15 times during the sync, for 1.06 h of state time in all. Source: `node_state`.
+  - **Memory was not a limit (measured; `host_sample`, `process_info`):**
+    - MemAvailable never fell below 735 MB (at 10-29 18:41, just before the reboots), and swap stayed essentially unused (under 1 MB).
+    - **On the FCMP++ blocks** (06:21–12:14 on 10-30; 4,669 host samples at 5 s, 4,616 monerod samples):
+
+      | Stretch | Lowest MemAvailable | monerod anonymous memory, max | Page cache | User CPU, all 6 cores | I/O wait |
+      |---|---|---|---|---|---|
+      | first spam waves, 06:30–09:12 | 1,197 MB | 2,314 MB | 1.2–1.6 GB | 63–72% | 0% |
+      | 16 blocks of ~9.5 MB, 09:15–09:56 | 942 MB | 2,563 MB | 0.84–0.95 GB | 71–79% | 0–1% |
+      | after the 10:00 reboot, 10:15–12:14 | 1,924 MB | 1,572 MB, then about 1,020 MB | 1.0–2.5 GB | 36–67% | 0–6% |
+
+    - **Swap:** none was used. monerod's resident memory was at most 3.0 GB, of which up to 1.27 GB was file-backed (LMDB pages).
+    - **Major page faults:** 15–64 a second.
+    - **Reading:** about 4–5 of the 6 cores were busy and the disk was barely waited on, so this node was CPU-bound with memory to spare. **Hypothesis:** block verification doesn't keep all 6 cores busy.
+
+## 2026-11-04
+
+- **The full difficulty recalculation from 2026-10-27/28 happened again, this time on four nodes, and again stopped the hard-disk node for about 9 minutes (measured).**
+  - **What happened:** monerod logged "Recalculating difficulties from height 0 to height N" (`blockchain.cpp:1089` in v3.1; the same message was at line 1070 before the upgrade) on four of the synchronized nodes whose logs I can read:
+
+    | Node | Storage | Started (UTC, 11-04) | Chain length N | Recalculation over by | Blocked for |
+    |---|---|---|---|---|---|
+    | `op-q6600-ssd` | SATA SSD | 18:02:42.9 | 3,124,650 | next log line 18:04:36.6 | about 1.9 min |
+    | `exp-2c2g` | virtual disk on a SATA SSD | 18:03:08.7 | 3,124,650 | next block 18:06:19.5 | at most 3.2 min (not measured more closely) |
+    | `op-g6950-hdd` | rotational HDD | 18:03:53.7 | 3,124,650 | next block 18:12:55.9 | 9 min 2 s |
+    | `ref-a` | NVMe | 18:11:05.6 | 3,124,653 | next log line 18:11:36.6 | at most 31 s |
+
+    It did not appear on `ref-b`. This is the first time on `ref-a`. The line is INFO level, so it isn't in Parquet; I read it from each node's `bitmonero.log`. No node logged it again from 18:14 to 19:55. `op-n450-hdd` wasn't at the tip.
+  - **No new block arrived while three of the four started (measured):** block 3,124,650 was added at 17:55:58 and block 3,124,651 at 18:06:19 on the nodes that weren't blocked, a gap of 10 min 21 s. No line in the log just before the recalculation says what started it; on `op-g6950-hdd` and `op-q6600-ssd` the previous lines are the ones that end block 3,124,650 at 17:55:58.
+  - **Cost on the HDD node (measured):**
+    - its `get_info` polls failed 18 times from 18:04:15 to 18:12:45 (`rpc_error`), and the hub marked it `UNRESPONSIVE` from 18:08:49 to 18:13:49 (`node_state`); the sidecar uploaded a stall bundle at 18:09:45;
+    - I/O wait was about 42% of its 2 cores (18:08–18:10), with about 2,400 major page faults per 20 s; 71,363 major faults from 18:02 to 18:14, against 0–1 per 2 minutes before it. MemAvailable stayed at about 3.0 GB (`host_sample`);
+    - block 3,124,651, which the other nodes added at 18:06:19, reached it at 18:12:55.9, **6 min 37 s late**, and took 7,987 ms to add (`block_timing`). During the recalculation it refused inbound connections as "too many connections from the same address" (18:06:44, 18:07:18, 18:09:00).
+  - **Cost on the others (measured):** `op-q6600-ssd` and `exp-2c2g` each failed 3 `get_info` polls in 18:00–18:20 (`rpc_error`). Neither was marked unresponsive, and neither was `ref-a`.
+  - **No fork logged (measured):** `chain_event_log` has no row from 17:00 to 19:00.
+  - **The same pattern as 10-27 (measured):** the HDD node was blocked about 9 minutes both times, with about 42% I/O wait and about 3.0 GB of MemAvailable. The SSD-backed nodes took 1.7–2.1 min on 10-27 and about 1.9 min (`op-q6600-ssd`) this time.
+  - **Hypotheses (not checked):**
+    - What triggers it is still unknown. This time three nodes started within 71 s of each other, at the same chain length and with no new block arriving, and `ref-a` 8 minutes later. Something that reaches each node at a different time, such as a P2P message, still fits; I have not read the source.
+    - It has happened twice in 8 days (10-27 and 11-04). On a node with a slow disk, each occurrence is a multi-minute outage of RPC and block intake.
+
+## 2026-11-05/06
+
+- **`op-n450-hdd`: the same ~0.3 MB pre-fork blocks take it 22–36 s each, 15–27 times as long as on the other low-end nodes, and nearly all of it is transaction checking (measured).**
+  - **The blocks:** every block over 200,000 bytes of cumulative weight in three height ranges that `op-n450-hdd` reached on 11-05/06. Each node in the table processed them during its own initial sync, so every node saw the transactions for the first time. Mean block weight was 0.29–0.30 MB. Source: `block_timing` (`block_processing_ms`, `t_checktx_ms`), deduplicated by height.
+
+    | Node | 9 blocks, 2,489,920–2,491,992 | 72 blocks, 2,557,314–2,560,284 | 200 blocks, 2,601,043–2,607,727 |
+    |---|---|---|---|
+    | `op-n450-hdd` | 36.3 s | 34.3 s | 22.4 s |
+    | `vol-03` | 2.16 s | 2.30 s | 1.40 s |
+    | `exp-2c2g` | 1.95 s | 2.00 s | 1.17 s |
+    | `op-q6600-ssd` | 1.68 s | 1.69 s | 1.52 s |
+    | `vol-04` | 1.37 s | 1.32 s | 1.08 s |
+    | `ref-a` | 0.22 s | 0.22 s | 0.29 s |
+    | `ref-b` | 0.15 s | 0.15 s | 0.24 s |
+
+    Mean time per block. On `op-n450-hdd`, `t_checktx` was 34.6 s, 32.7 s and 19.0 s of those means.
+  - **Where the time goes (measured):** across its 470 blocks over 20 s since 11-05 00:00, the mean total was 34.6 s, of which `t_checktx` was 29.5 s, `t3` 1.7 s and `addblock` 1.5 s. The worst was block 2,511,871 (0.49 MB) at 65.2 s, 62.6 s of it `t_checktx`. Example: block 2,559,482 (0.30 MB), 33.4 s, of which `t_checktx` 31.9 s.
+  - **Sync speed (measured; `block_timing`):** in hours without such blocks, the node added 10,600–13,000 blocks an hour (empty blocks about 0.2 s each). The heavy stretches cut that to 2,864 (11-06 03:00–04:00), 1,519 (08:00–09:00) and 1,825 (09:00–10:00). They ran about 02:56–03:40 and 07:29–10:25 on 11-06.
+  - **CPU and memory (measured; `host_sample`):**
+
+    | Window (11-06, UTC) | user | system | iowait | idle | lowest MemAvailable |
+    |---|---|---|---|---|---|
+    | heavy, 03:00–03:40 | 74.6% | 1.5% | 11.7% | 12.3% | 56 MB |
+    | heavy, 08:00–09:50 | 47.4% | 1.8% | 24.7% | 26.2% | 35 MB |
+    | empty blocks, 04:10–05:50 | 69.7% | 2.5% | 12.3% | 15.5% | 68 MB |
+
+    No out-of-memory kill in the kernel journal; monerod's swap stayed about 250 MB (`process_info`).
+  - **Hypotheses (not checked):**
+    - Transaction checking on this CPU is far slower per block than anywhere else: 17–19 times `exp-2c2g`, which is a one-core VM. The box-wide CPU figures above don't show the machine saturated, which would fit checking running on one thread while the other is mostly idle. I haven't looked at per-thread CPU or read the code.
+    - The iowait of 24.7% in the later window isn't explained.
+  - **Why it matters for the minimum-hardware question:** on this hardware, verifying a 0.3 MB block of pre-fork transactions takes longer than a quarter of the 120 s block target. A block of that kind arriving at the tip would be accepted, but the node would be busy for half a minute.
+
+- **While it verifies those blocks, `op-n450-hdd`'s only peer link times out (measured).**
+  - **11-05, around block 2,491,983 (`log_warning`, `block_timing`):** a `COMMAND_TIMED_SYNC` to its only outbound peer failed with `LEVIN_ERROR_CONNECTION_TIMEDOUT` at 21:01:13. From 21:03:04 to 21:09:39 a `COMMAND_TIMED_SYNC` failed seven times, every 70–80 s, each as "Failed to do_send" then `LEVIN_ERROR_CONNECTION`. Blocks 2,491,983 (41.1 s), 2,491,984 (38.6 s) and 2,491,986 (37.3 s) finished at 21:03:54, 21:04:38 and 21:05:52.
+  - **Hourly counts (`log_warning`):** in the 07:00–10:00 hours of 11-06, `LEVIN_ERROR_CONNECTION_TIMEDOUT` came 3, 6 and 4 times, and "monerod is now disconnected from the network" 3, 9 and 4 times. From 18:00 on 11-05 to 06:00 on 11-06, outside the hours with heavy stretches (21:00, 02:00 and 03:00), it was 0 and 1–2 an hour.
+  - **Hypothesis:** the thread that verifies a block is the one that would answer the peer, so the peer's timed-sync times out. I haven't read the code. On 10-27 one such timeout reset the 9,999-block count (see 2026-10-27/28); I haven't checked the count since.
+
+- **`op-n450-hdd`'s RPC goes silent for up to 42 minutes during heavy blocks (measured; `node_state`).**
+  - From 11-05 00:00 to 11-06 12:00 the hub marked it `UNRESPONSIVE` (no `get_info` answer for 300 s) 86 times, for 7.3 h in all, about 20% of the 36 hours.
+  - The longest were 42.4 min (11-06 02:54:51–03:37:17, in the heavy stretch), 19.5 min twice (11-05 02:17–02:37 and 02:44–03:03), 17.5 min (11-05 21:04–21:22, the timeouts above) and 16.5 min (11-06 09:32–09:49).
+  - **Why it matters:** a wallet or service using a node like this would see it disappear for up to three-quarters of an hour while the node is otherwise healthy.
+
+- **The daily package jobs pushed `op-n450-hdd`'s monerod into swap; the jobs are now off (measured; `process_info`, the box's systemd journal).**
+  - **11-05:** monerod's swap went from about 250 MB to 535 MB at 06:51:26.
+  - **11-06:** the package upgrade job ran 06:01:02–06:13:48. monerod's swap went from 262 MB (05:56) to 541 MB (06:05:10), and its resident memory fell from 564 MB to about 300 MB. It was back to 286 MB at 06:18. The package download job (06:51–06:52) did the same briefly: 495 MB of swap at 06:52.
+  - The hub marked the node `UNRESPONSIVE` from 06:11:19 to 06:12:19 on 11-06, during the upgrade job.
+  - **Setup change:** both timers (`apt-daily.timer`, `apt-daily-upgrade.timer`) were disabled on 11-06 at about 12:00 UTC, so the box now gets updates by hand.
+  - **For the minimum-hardware question:** on a box this short of memory, the operating system's own routine jobs compete with monerod. A default install will see this daily.
 
 ---
 
