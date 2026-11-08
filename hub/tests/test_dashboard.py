@@ -368,3 +368,40 @@ def test_sidecar_versions(tmp_path):
     live = dash.build_live(time.time())
     assert live["sidecar_latest"] == "0.1.6"
     assert [(n["sidecar"], n["sidecar_update"]) for n in live["nodes"]] == [("0.1.6", False), ("0.1.3", True)]
+
+
+def test_experimental_badge_and_markers(tmp_path):
+    dash, mon, chain, reg, hist, now = _world(tmp_path)
+    for nid in ("ref-a", "vol-01"):
+        _node(mon, reg, nid, 100)
+    mon.evaluate()
+    dash.mods = {"lowmem-v2": "lower-memory proof verification"}
+    t = time.time()
+    reg.set_build("vol-01", ["zz-secret-label", "lowmem-v2"], t - 7200)
+    reg.set_build("vol-01", [], t - 3600)
+    reg.set_build("vol-01", ["lowmem-v2"], t - 1800)
+    reg.set_build("vol-01", ["lowmem-v2"], t - 3 * 86400)   # outside the 24 h window
+    live = dash.build_live(t)
+    by_id = {n["id"]: n for n in live["nodes"]}
+    assert by_id[dash.public("ref-a")]["experimental"] is None
+    exp = by_id[dash.public("vol-01")]["experimental"]
+    assert exp == {"since": round(t - 1800, 1), "mods": ["lower-memory proof verification"]}
+    reg.set_build("vol-01", ["zz-secret-label", "lowmem-v2"], t - 60)
+    exp = next(n for n in dash.build_live(t)["nodes"] if n["id"] == dash.public("vol-01"))["experimental"]
+    assert exp["mods"] == ["lower-memory proof verification", "unlisted modification"] or \
+        sorted(exp["mods"]) == ["lower-memory proof verification", "unlisted modification"]
+    reg.set_build("vol-01", [], t - 30)
+    assert all(n["experimental"] is None for n in dash.build_live(t)["nodes"])
+    h = dash.build_history(t)
+    bc = h["build_changes"]
+    assert list(bc) == [dash.public("vol-01")]
+    assert [(c["experimental"], len(c["mods"])) for c in bc[dash.public("vol-01")]] == [
+        (True, 2), (False, 0), (True, 1), (True, 2), (False, 0)]
+    assert all(t - 86400 <= c["t"] <= t for c in bc[dash.public("vol-01")])
+    import json
+    published = json.dumps(dash.build_live(t)) + json.dumps(h)
+    for secret in ("zz-secret-label", "lowmem-v2", "vol-01"):
+        assert secret not in published
+    blob = json.dumps(live) + json.dumps(h)
+    assert "zz-secret-label" not in blob and "lowmem-v2" not in blob
+    assert not any(s in blob for s in SECRETS + INTERNAL)

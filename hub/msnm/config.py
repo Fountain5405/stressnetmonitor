@@ -9,6 +9,7 @@ import yaml
 from .chain import RefConfig
 from .dashboard import DashboardConfig
 from .live import Thresholds
+from .registry import MOD_RE
 
 
 @dataclass
@@ -39,6 +40,19 @@ class Config:
     zmq_nodes: list[ZmqNode] = field(default_factory=list)
     thresholds: Thresholds = field(default_factory=Thresholds)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    mods: dict[str, str] = field(default_factory=dict)    # mod label -> public description
+
+
+def _check_mods(mods) -> dict[str, str]:
+    if not isinstance(mods, dict):
+        raise ValueError("mods: must map label -> description")
+    for label, desc in mods.items():
+        if not MOD_RE.match(str(label)):
+            raise ValueError(f"mods: bad label {label!r}")
+        if (not isinstance(desc, str) or not 1 <= len(desc) <= 80 or not desc.isprintable()
+                or "<" in desc or ">" in desc or "://" in desc):
+            raise ValueError(f"mods[{label!r}]: 1-80 printable characters, no '<', '>' or '://'")
+    return {str(k): v for k, v in mods.items()}
 
 
 def load(path: str) -> Config:
@@ -49,11 +63,12 @@ def load(path: str) -> Config:
     if unknown:
         raise ValueError(f"unknown config keys: {sorted(unknown)}")
     cfg = Config(**{k: v for k, v in raw.items()
-                    if k not in ("references", "zmq_nodes", "thresholds", "dashboard")})
+                    if k not in ("references", "zmq_nodes", "thresholds", "dashboard", "mods")})
     cfg.references = [RefConfig(**r) for r in raw.get("references") or []]
     cfg.zmq_nodes = [ZmqNode(**z) for z in raw.get("zmq_nodes") or []]
     cfg.thresholds = Thresholds(**(raw.get("thresholds") or {}))
     cfg.dashboard = DashboardConfig(**(raw.get("dashboard") or {}))
+    cfg.mods = _check_mods(raw.get("mods") or {})
     if not cfg.references:
         # Data collection works without references; node states stay UNKNOWN
         # until one is configured.

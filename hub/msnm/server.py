@@ -93,7 +93,7 @@ class Hub:
         if cfg.dashboard.enabled:
             self.history = History()
             self.dashboard = Dashboard(cfg.dashboard, self.monitor, self.chain, self.history, self.registry,
-                                       [r.id for r in cfg.references], self.sidecar_latest)
+                                       [r.id for r in cfg.references], self.sidecar_latest, cfg.mods)
         self.started = time.time()
         self._tasks: list[asyncio.Task] = []
 

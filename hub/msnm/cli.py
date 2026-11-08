@@ -3,6 +3,7 @@
   msnm serve -c hub.yaml
   msnm node add NODE_ID [NODE_ID ...] --tier operator|trusted|volunteer --position lan|remote [--note ...]
   msnm node list | revoke NODE_ID | rotate-token NODE_ID | set NODE_ID [--tier ..] [--position ..]
+  msnm node build NODE_ID (--mod LABEL ... | --stock) [--since ISO8601] | builds [NODE_ID] | build-rm NODE_ID --since ISO8601
   msnm reparse --out DIR [--node NODE_ID]   rebuild sidecar tables from the raw archive
   msnm verify-ledger                        check the raw archive's hash chain
   msnm compact [--before YYYY-MM-DD]        merge each day's Parquet part files
@@ -17,6 +18,7 @@ import gzip
 import logging
 import os
 import sys
+import time
 from collections import defaultdict
 
 from . import config as config_mod
@@ -133,6 +135,21 @@ def cmd_serve(cfg, args) -> int:
     return 0
 
 
+def _parse_since(text: str) -> float:
+    """ISO 8601 with an explicit zone (Z or an offset) -> unix seconds."""
+    try:
+        t = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(f"bad time {text!r}: use e.g. 2026-11-07T13:34:17Z") from None
+    if t.tzinfo is None:
+        raise ValueError(f"time {text!r} has no zone: add Z or an offset such as +01:00")
+    return t.timestamp()
+
+
+def _iso(ts: float) -> str:
+    return dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def cmd_node(cfg, args) -> int:
     reg = _registry(cfg)
     hub_url = getattr(args, "hub_url", None) or cfg.public_url or "https://<your-hub>"
@@ -161,6 +178,20 @@ def cmd_node(cfg, args) -> int:
         print(f"revoked {args.node_id}; its pushes are refused within 10 s")
     elif args.node_cmd == "set":
         reg.set(args.node_id, tier=args.tier, position=args.position, note=args.note)
+    elif args.node_cmd == "build":
+        since = _parse_since(args.since) if args.since else float(int(time.time()))
+        reg.set_build(args.node_id, [] if args.stock else args.mod, since)
+        for m in sorted(set(args.mod or [])):
+            if m not in cfg.mods:
+                print(f"warning: {m!r} is not in hub.yaml mods:, the dashboard shows it as an unlisted modification",
+                      file=sys.stderr)
+        print(f"recorded {args.node_id}: {'stock' if args.stock else ','.join(sorted(set(args.mod)))}")
+    elif args.node_cmd == "builds":
+        for b in reg.builds(args.node_id):
+            print(f"{b.node_id:24s} {_iso(b.since)}  {','.join(b.mods) or 'stock'}")
+    elif args.node_cmd == "build-rm":
+        reg.remove_build(args.node_id, _parse_since(args.since))
+        print(f"removed the {args.node_id} entry at {args.since}")
     elif args.node_cmd == "list":
         for n in reg.all():
             created = dt.datetime.fromtimestamp(n.created, dt.timezone.utc).strftime("%Y-%m-%d")
@@ -244,6 +275,16 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--tier", choices=TIERS)
     s.add_argument("--position", choices=POSITIONS)
     s.add_argument("--note")
+    b = nsub.add_parser("build", help="record which experimental mods a node runs from now (or --since)")
+    b.add_argument("node_id")
+    grp = b.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--mod", action="append", metavar="LABEL")
+    grp.add_argument("--stock", action="store_true")
+    b.add_argument("--since", help="ISO 8601 with zone, e.g. 2026-11-07T13:34:17Z (default: now)")
+    nsub.add_parser("builds").add_argument("node_id", nargs="?")
+    br = nsub.add_parser("build-rm")
+    br.add_argument("node_id")
+    br.add_argument("--since", required=True, help="the entry's time, as listed by `node builds`")
     rp = sub.add_parser("reparse")
     rp.add_argument("--out", required=True)
     rp.add_argument("--node")

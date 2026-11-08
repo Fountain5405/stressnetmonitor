@@ -59,6 +59,7 @@ TARGET_S = 120           # block target; hashrate = difficulty / 120 s
 RPC_TIMEOUT_S = 10.0     # the sidecar's RPC_TIMEOUT: a call with no answer by then is a timeout
 RPC_SLOW_S = 1.0         # 95th percentile get_info time above this (or any timeout): "RPC slow"
 RPC_SPAN_S = 900         # window of the live RPC numbers
+UNLISTED_MOD = "unlisted modification"
 RPC_KEEP = 240           # get_info samples kept per node (2 h at one poll per 30 s)
 ID_ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ"   # no 0/O, 1/I/L, U
 _ID_RE = re.compile(r"[A-Za-z0-9-]{2,16}")
@@ -601,7 +602,8 @@ def load_history(parquet_root: str, until: float, window_s: float = WINDOW_S) ->
 
 class Dashboard:
     def __init__(self, cfg: DashboardConfig, monitor: Monitor, chain: Chain, history: History,
-                 registry: Registry, references: list[str], sidecar_latest: str | None = None):
+                 registry: Registry, references: list[str], sidecar_latest: str | None = None,
+                 mods: dict[str, str] | None = None):
         self.cfg = cfg
         self.monitor = monitor
         self.chain = chain
@@ -609,6 +611,7 @@ class Dashboard:
         self.registry = registry
         self.references = list(references)
         self.sidecar_latest = sidecar_version(sidecar_latest)
+        self.mods = dict(mods or {})
         self._cache: dict[str, tuple[float, bytes, bytes]] = {}
         self._id_cache: tuple[tuple, dict[str, str]] = ((), {})
         self._static = self._load_static()
@@ -700,6 +703,21 @@ class Dashboard:
                  if nl.node.node_id not in hide and nl.node.node_id not in revoked]
         ids = self._ids()
         return sorted(nodes, key=lambda nl: (nl.node.node_id not in self.references, ids[nl.node.node_id]))
+
+    def _descs(self, labels: tuple[str, ...]) -> list[str]:
+        """Public texts for mod labels: from the catalogue only, never the label itself."""
+        return [self.mods.get(m, UNLISTED_MOD) for m in labels]
+
+    def _experimental(self, nid: str, now: float) -> dict | None:
+        mods = self.registry.build_at(nid, now)
+        if not mods:
+            return None
+        since = max(b.since for b in self.registry.builds(nid) if b.since <= now)
+        return {"since": round(since, 1), "mods": self._descs(mods)}
+
+    def _build_changes(self, nid: str, now: float, window_s: float) -> list[dict]:
+        return [{"t": round(b.since, 1), "experimental": bool(b.mods), "mods": self._descs(b.mods)}
+                for b in self.registry.builds(nid) if now - window_s <= b.since <= now]
 
     def _blocks(self) -> list[dict]:
         """The canonical reference's recent headers, oldest first. `t` is when a
@@ -813,6 +831,7 @@ class Dashboard:
             "hw": hardware(prof),
             "sidecar": sidecar,
             "sidecar_update": version_newer(self.sidecar_latest, sidecar),
+            "experimental": self._experimental(nid, now),
             "rpc": self.history.rpc_stats(nid, now),
             "version": clean(info.get("version"), 40),
             "state": nl.state,
@@ -921,6 +940,7 @@ class Dashboard:
                 "txs": [_num(b["txs"]) for b in blocks],
             },
             "per_block": per_block,
+            "build_changes": {ids[nid]: bc for nid in order if (bc := self._build_changes(nid, now, hist.window_s))},
             "minutes": {"t": [m * 60 for m in mins], "tx_in": tx_in, "nodes": series},
         }
 

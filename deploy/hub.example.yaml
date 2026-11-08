@@ -54,6 +54,14 @@ dashboard:
   aliases: {}                    # node id -> public ID, e.g. to keep an ID when a node is re-registered
   links: []                      # footer links, e.g. [{label: "Source code", url: "https://..."}]
 
+# Experimental monerod builds. Record a node's history with
+# `msnm node build NODE_ID --mod LABEL ...` (or --stock). The dashboard shows
+# only the descriptions below, publicly: 1-80 printable characters, no < > or ://.
+# A label missing here shows as "unlisted modification".
+mods:
+  lowmem-v2: lower-memory FCMP++ proof verification
+  s64-field: faster Field25519 arithmetic
+
 thresholds:
   silent_after_s: 120            # no pushes for this long: DOWN
   unresponsive_polls: 2          # consecutive failed get_info: UNRESPONSIVE

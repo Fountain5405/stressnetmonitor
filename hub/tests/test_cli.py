@@ -81,3 +81,27 @@ def test_ping_text_announces_newest_sidecar(tmp_path):
     assert sidecar_latest(f) == "1.2.3"
     f.write_text('SIDECAR_VERSION="$(evil)"\n')
     assert sidecar_latest(f) is None and sidecar_latest(tmp_path / "missing") is None
+
+
+def test_node_build_history(tmp_path, capsys):
+    cfg = _cfg(tmp_path)
+    main(["-c", cfg, "node", "add", "vol-b", "--tier", "volunteer", "--position", "remote"])
+    capsys.readouterr()
+    assert main(["-c", cfg, "node", "build", "vol-b", "--mod", "s64-field", "--mod", "lowmem-v2",
+                 "--since", "2026-06-07T13:34:17Z"]) == 0
+    assert main(["-c", cfg, "node", "build", "vol-b", "--stock", "--since", "2026-06-08T14:34:17+01:00"]) == 0
+    capsys.readouterr()
+    assert main(["-c", cfg, "node", "builds", "vol-b"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert [ln.split() for ln in lines] == [["vol-b", "2026-06-07T13:34:17Z", "lowmem-v2,s64-field"],
+                                            ["vol-b", "2026-06-08T13:34:17Z", "stock"]]
+    assert main(["-c", cfg, "node", "build-rm", "vol-b", "--since", "2026-06-08T13:34:17Z"]) == 0
+    assert main(["-c", cfg, "node", "build-rm", "vol-b", "--since", "2026-06-08T13:34:17Z"]) == 1   # gone
+    capsys.readouterr()
+    assert main(["-c", cfg, "node", "build", "vol-b", "--stock", "--since", "2026-06-07T13:34:17"]) == 1  # naive
+    assert "no zone" in capsys.readouterr().err
+    assert main(["-c", cfg, "node", "build", "vol-b", "--mod", "Bad Label"]) == 1
+    assert main(["-c", cfg, "node", "build", "nobody", "--stock"]) == 1
+    capsys.readouterr()
+    main(["-c", cfg, "node", "builds"])
+    assert capsys.readouterr().out.count("\n") == 1

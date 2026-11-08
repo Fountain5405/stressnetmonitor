@@ -90,6 +90,9 @@
     const p = (n) => String(n).padStart(2, "0");
     return p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()) + (withSec ? ":" + p(d.getUTCSeconds()) : "");
   }
+  function utcDate(ts) {
+    return new Date(ts * 1000).toISOString().slice(0, 16).replace("T", " ");
+  }
   function setValue(el, text, unit) {
     el.textContent = text;
     if (unit) el.append(h("span", "unit", unit));
@@ -275,6 +278,7 @@
     c.pill = h("span", "pill");
     head.append(name, c.pill);
     c.tags = h("div", "tags");
+    c.mods = h("div", "mods");
     c.hw = h("div", "hw");
     c.gen = h("div", "gen");
     c.isa = h("div", "isa");
@@ -315,7 +319,7 @@
     c.ver = h("span");
     c.seen = h("span");
     foot.append(c.ver, c.seen);
-    c.root.append(head, c.tags, c.hw, c.gen, c.isa, c.disk, c.reason, metrics, c.sync, c.spark, foot);
+    c.root.append(head, c.tags, c.mods, c.hw, c.gen, c.isa, c.disk, c.reason, metrics, c.sync, c.spark, foot);
     return c;
   }
 
@@ -381,7 +385,10 @@
     if (n.hw && n.hw.vm) tags.push(["", "VM"]);
     if (r && r.slow) tags.push(["warn", "RPC slow"]);
     if (n.sidecar_update) tags.push(["", "sidecar update"]);
+    if (n.experimental) tags.push(["exp", "experimental"]);
     for (const [cls, text] of tags) c.tags.append(h("span", "tag " + cls, text));
+    c.mods.textContent = n.experimental
+      ? "mods: " + n.experimental.mods.join("; ") + " (since " + utcDate(n.experimental.since) + " UTC)" : "";
 
     const [hw, disk] = hwText(n.hw);
     c.hw.textContent = hw;
@@ -704,7 +711,31 @@
     if (u.cursor.idx != null || !u.data[0].length) return;
     u.setLegend({ idxs: u.data.map((d, i) => (i === 0 ? d.length - 1 : lastIdx(d))) }, false);
   }
+  // Dashed vertical markers where a node's build changed, in its series colour.
+  // DOM boxes in uPlot's overlay (not canvas) so each carries a hover text.
+  function buildMarks(u) {
+    for (const el of u.over.querySelectorAll(".bmark")) el.remove();
+    const bc = (hist && hist.build_changes) || {};
+    for (const id of hist.order) {
+      for (const c of bc[id] || []) {
+        const x = u.valToPos(c.t, "x");
+        if (!Number.isFinite(x) || x < 0 || x > u.bbox.width / uPlot.pxRatio) continue;
+        const el = h("div", "bmark");
+        el.style.left = x + "px";
+        el.style.borderColor = colorFor(id);
+        el.title = id + ": " + (c.experimental ? "experimental build: " + c.mods.join("; ") : "back to stock");
+        u.over.append(el);
+      }
+    }
+  }
   const LEGEND_HOOKS = { ready: [showLatest], setData: [showLatest], setCursor: [showLatest] };
+  const MARK_HOOKS = { ready: [buildMarks], setData: [buildMarks], setSize: [buildMarks] };
+
+  function mergeHooks(...sets) {
+    const out = {};
+    for (const s of sets) for (const k of Object.keys(s)) out[k] = (out[k] || []).concat(s[k]);
+    return out;
+  }
 
   function renderCharts() {
     if (!hist) return;
@@ -726,7 +757,7 @@
             tzDate: (ts) => uPlot.tzDate(new Date(ts * 1000), "Etc/UTC"),
             cursor: { sync: { key: "msnm", scales: ["x", null] }, points: { size: 6 } },
             legend: { live: true },
-            hooks: Object.assign({}, LEGEND_HOOKS, spec.hooks ? spec.hooks(hist) : {}),
+            hooks: mergeHooks(LEGEND_HOOKS, spec.nodes ? MARK_HOOKS : {}, spec.hooks ? spec.hooks(hist) : {}),
           }, spec.opts(hist));
           spec.u = new uPlot(opts, data, spec.plot);
           spec.sig = sig;
