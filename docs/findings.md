@@ -792,6 +792,16 @@ The aim is to test whether the drops above also happen with a normal peer set, r
   - **Setup change:** both timers (`apt-daily.timer`, `apt-daily-upgrade.timer`) were disabled on 11-06 at about 12:00 UTC, so the box now gets updates by hand.
   - **For the minimum-hardware question:** on a box this short of memory, the operating system's own routine jobs compete with monerod. A default install will see this daily.
 
+## 2026-11-10
+
+- **`op-n450-hdd` stopped syncing at block 3,105,400 for 2 hours: every block response from its only peer was larger than the 100 MB message limit (measured).**
+  - **Setup:** stock `monerod` v0.19.0.0-beta.3.1, pruned, default sync settings, one exclusive peer (`ref-b`). It has been syncing from scratch since 10-28.
+  - **What happened (`block_timing`, `log_warning`):** it added block 3,105,400 at 09:23:02.083 UTC. From 09:23:02.439 to 11:27:12 its connection to `ref-b` was closed 3,685 times, every 1–3 s, with `Maximum packet size exceed!, m_max_packet_size = 100000000, packet header received 134253303, command 2004, connection will be closed.` Every one gave the same size, 134,253,303 bytes. Command 2004 is the reply that carries requested blocks. `ref-b` logged `Failed to send message, dropping it` for that connection 3,035 times in the same period. No block was added for 2 h 4 min, and `monerod` neither crashed nor restarted.
+  - **The blocks (measured, `block_timing` on `ref-b`):** blocks 3,105,401–3,105,500 weigh 162.4 MB together; the running total passes 100 MB at block 3,105,434, and the largest block is 10.03 MB. These are the first of the 128-input-transaction blocks. The blocks just before them are nearly empty.
+  - **Why it never cleared (hypothesis, consistent with the identical sizes):** the node asks for a 100-block span when recent blocks are small. With one peer, every retry is the same request to the same peer, so the same oversized reply comes back each time. An offline replay on 11-08 (a stock node on a copy of the chain, with `ref-b` as its only peer) logged that 100-block request from 3,105,401 and stopped the same way.
+  - **Known workaround, now applied (setup change, 11:31 UTC):** `--block-sync-size 5` added to its command line, so it asks for 5 blocks at a time. The 11-08 replay with this flag got past these blocks to the tip. On the live node (measured): after the restart it added blocks 3,105,401–3,105,423 within 2 minutes, with no `Maximum packet size` error since. It then needed 4 h 16 min for the 17 blocks 3,105,424–3,105,440 (11:33:21 to 15:49:17 UTC): typically 13–14 minutes a block, and up to 30. That pace is this box's verification speed on 128-input transactions, not the sync setting.
+  - **Why it matters for low-end nodes:** a stock node that syncs through these heights with default settings and one peer stops here and does not recover by itself. The fix is a command-line flag the operator has to know about. With several peers a node might get the blocks elsewhere or keep reconnecting instead of stopping; that is not tested here (hypothesis).
+
 ---
 
 ## Monitor notes
