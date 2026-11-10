@@ -129,6 +129,7 @@ Every 30 s (by default) it uploads one compressed batch containing:
 
 - **`monerod` RPC responses**, queried on your node's local RPC port (`127.0.0.1`): `get_info`, `get_last_block_header`, `get_fee_estimate`, `get_connections`, `get_bans` and `get_transaction_pool_stats`. Your RPC port does **not** need to be reachable from the internet.
 - **Host counters from `/proc`**, every 5 s: CPU time, memory, swap, load, paging, disk I/O for the device that holds the blockchain, total network bytes, and pressure stall information.
+- **CPU temperature from sysfs**, every 5 s when available: the hottest CPU thermal-zone reading, falling back to Intel `coretemp` or AMD `k10temp`/`zenpower` die/CCD readings. Unrecognized, unreadable, or invalid sensors are omitted; disk, GPU, and generic board temperatures are not used. No extra privileges or packages are needed. The dashboard displays whole degrees Celsius beside CPU usage (for example, `1% / 45C`); hosts without a supported sensor keep the usage-only display. The hub stores `cpu_temp_c` in `host_sample` and publishes it in the live dashboard API.
 - **`monerod` process counters**: CPU time, memory, page faults and I/O.
 - **Selected `monerod` log lines**:
   - block-added messages with their timing breakdown;

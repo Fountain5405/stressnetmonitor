@@ -851,6 +851,7 @@ class Dashboard:
             "ms_med": _num(_median([ms_hist.get(b["h"]) for b in last30]), 1),
             "delay_med": _num(_median([self._delay(nid, b) for b in last30]), 3),
             "cpu": _num(host.get("cpu_busy_ratio"), 3),
+            "cpu_temp_c": _num(host.get("cpu_temp_c"), 1),
             "iowait": _num(host.get("cpu_iowait_ratio"), 3),
             "steal": _num(host.get("cpu_steal_ratio"), 3),
             "mcpu": _num(proc.get("cpu_cores"), 2),

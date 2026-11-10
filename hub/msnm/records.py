@@ -177,6 +177,8 @@ def _host_rows(p: Parsed, node: str, ts, rest: str) -> None:
         row[name] = _num(v)
     for k in _HOST_DIRECT:
         row[k] = _num(kv.get(k))
+    temp = _num(kv.get("cpu_temp_mc"))
+    row["cpu_temp_c"] = temp / 1000 if temp is not None and -40000 <= temp <= 150000 else None
     load = kv.get("load", "").split(",")
     for name, v in zip(("load1", "load5", "load15"), load):
         row[name] = _num(v)

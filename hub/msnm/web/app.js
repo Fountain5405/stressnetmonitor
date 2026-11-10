@@ -260,7 +260,7 @@
     ["verify", "Verify", "Time to verify and add the latest block; below: median of the last 30 blocks"],
     ["delay", "Delay", "Seconds after a reference first saw the latest block until this node accepted it; below: median of the last 30"],
     ["pool", "Pool", "Transactions in this node's pool; below: its share of the reference's pool"],
-    ["cpu", "CPU", "Host CPU busy; below: monerod's own use, in cores"],
+    ["cpu", "CPU", "Host CPU busy / hottest available CPU sensor in Celsius; below: monerod's own use, in cores"],
     ["ram", "RAM", "Host memory in use, by every program on the box; below: the total"],
     ["disk", "Disk", "Data disk busy time; below: average I/O latency"],
     ["mon", "monerod", "monerod's own memory: its private pages plus what it has in swap, which the box has to hold for it; below: its resident memory, which also counts cached pages of the database file"],
@@ -416,7 +416,8 @@
     setMetric(c, "delay", secs(n.delay_s), ok(n.delay_med) ? "med " + secs(n.delay_med) : "");
     const cover = ok(n.pool_txs) && ok(net.pool_txs) && net.pool_txs > 0 ? n.pool_txs / net.pool_txs : null;
     setMetric(c, "pool", int(n.pool_txs), ok(cover) && !n.ref ? pct(Math.min(cover, 9.99)) + " of ref" : "");
-    setMetric(c, "cpu", pct(n.cpu), ok(n.mcpu) ? fixed(n.mcpu, 1) + " cores" : "");
+    const cpuTemp = ok(n.cpu_temp_c) ? " / " + Math.round(n.cpu_temp_c) + "C" : "";
+    setMetric(c, "cpu", pct(n.cpu) + cpuTemp, ok(n.mcpu) ? fixed(n.mcpu, 1) + " cores" : "");
     bar(c, "cpu", n.cpu);
     setMetric(c, "ram", pct(n.mem_used), n.hw && ok(n.hw.ram_gb) ? "of " + gb(n.hw.ram_gb) : "");
     bar(c, "ram", n.mem_used);
