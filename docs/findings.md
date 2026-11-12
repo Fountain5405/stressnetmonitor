@@ -804,6 +804,32 @@ The aim is to test whether the drops above also happen with a normal peer set, r
 
 ---
 
+## 2026-11-11/12
+
+- **New node `op-1265u-ssd`: a stock node on a current laptop synced from scratch in 10 h 12 min, and stopped at block 3,105,400 the same way `op-n450-hdd` did (measured).**
+  - **Setup:** a laptop in everyday desktop use (12 CPU threads, 15 GB RAM, NVMe SSD). Stock `monerod` v0.19.0.0-beta.3.1 release binary, pruned, default sync settings, one exclusive peer (`ref-b`) on the LAN, no incoming connections.
+  - **Sync time (node log, `block_timing`):** it started from an empty data directory at 2026-11-11 13:51:49 UTC and logged `You are now synchronized` at 2026-11-12 00:04:24 UTC: 10 h 12 min 35 s. That includes the 11 min 20 s stop described below and one restart.
+  - **Progress (`block_timing`, time from the start until the block was added):**
+
+    | Block | Elapsed |
+    |---|---|
+    | 1,000,000 | 3 h 02 min |
+    | 2,000,000 | 6 h 19 min |
+    | 3,000,000 | 8 h 37 min |
+    | 3,102,800 (the fork) | 8 h 50 min |
+    | 3,105,400 | 9 h 25 min |
+    | 3,105,440 | 9 h 44 min |
+    | 3,110,000 | 10 h 00 min |
+    | 3,120,000 | 10 h 11 min |
+    | 3,129,600 (the tip) | 10 h 13 min |
+
+  - **The stop (`block_timing`, `log_warning`, node log):** it added block 3,105,400 at 23:16:57 UTC. From 23:16:59 to 23:28:17 its log has 665 `Maximum packet size exceed!` errors (349 of them are in `log_warning`). Each gives the same size as on `op-n450-hdd`, 134,253,303 bytes, for command 2004. It had no connected peer between retries, added no block for 11 min 20 s, and neither crashed nor restarted by itself.
+  - **Workaround applied (setup change, 23:28:17 UTC):** `monerod` was restarted with `--block-sync-size 5`. About 5 s later it answered RPC and was already past block 3,105,409, and it has logged no `Maximum packet size` error since. The sidecar was stopped across the restart, so `block_timing` has no rows for blocks 3,105,401–3,105,420.
+  - **The 128-input blocks (`block_timing`):** blocks 3,105,421–3,105,445 took 7 min 20 s (23:28:22 to 23:35:42 UTC), with a median processing time of 27 s a block. `op-n450-hdd` needed 13–14 minutes for a block there.
+  - **What it adds:** this is the second live stock node with one peer to stop at this block, and it has fast hardware: it reached the block 9 h 25 min into its sync. So the stop does not depend on a slow machine. That fits the 11-10 explanation (the 100-block request, hypothesis). A node with several peers is still not tested here.
+
+---
+
 ## Monitor notes
 
 These are about the monitor's behaviour, not the network's.
