@@ -319,7 +319,8 @@
     c.ver = h("span");
     c.seen = h("span");
     foot.append(c.ver, c.seen);
-    c.root.append(head, c.tags, c.mods, c.hw, c.gen, c.isa, c.disk, c.reason, metrics, c.sync, c.spark, foot);
+    c.vt = h("div", "vt");
+    c.root.append(head, c.tags, c.mods, c.hw, c.gen, c.isa, c.disk, c.reason, metrics, c.sync, c.spark, c.vt, foot);
     return c;
   }
 
@@ -389,6 +390,7 @@
     for (const [cls, text] of tags) c.tags.append(h("span", "tag " + cls, text));
     c.mods.textContent = n.experimental
       ? "mods: " + n.experimental.mods.join("; ") + " (since " + utcDate(n.experimental.since) + " UTC)" : "";
+    renderVt(c.vt, n.vt);
 
     const [hw, disk] = hwText(n.hw);
     c.hw.textContent = hw;
@@ -470,6 +472,50 @@
     pl.setAttribute("vector-effect", "non-scaling-stroke");
     svg.append(area, pl);
     c.sparkLbl.textContent = "verify, last " + vals.length + " blocks: " + ms(Math.min(...vals)) + "–" + ms(Math.max(...vals));
+  }
+
+  // ---------------------------------------------------------------- verification timings (optional section)
+  function vtMs(v) {
+    return v < 1000 ? v + " ms" : (v / 1000).toFixed(v < 10000 ? 2 : 1) + " s";
+  }
+
+  function renderVt(box, vt) {
+    box.textContent = "";
+    const t = h("table");
+    const hr = h("tr");
+    hr.append(h("th", null, "block time"), h("th", null, "at the tip"), h("th", null, "syncing"));
+    t.append(hr);
+    for (const [key, label] of [["small", "small blocks"], ["large", "large blocks"]]) {
+      const tr = h("tr");
+      tr.append(h("th", null, label));
+      for (const mode of ["tip", "sync"]) {
+        const cell = vt && vt[key] && vt[key][mode];
+        const td = h("td");
+        if (cell) {
+          td.append(h("div", "v", vtMs(cell.p50)),
+                    h("div", "s", "p90 " + vtMs(cell.p90) + " · " + cell.n.toLocaleString("en-US") + " blocks"));
+        } else {
+          td.append(h("div", "v", "—"));
+        }
+        tr.append(td);
+      }
+      t.append(tr);
+    }
+    box.append(t);
+  }
+
+  function setVtShown(on) {
+    document.body.classList.toggle("show-vt", on);
+    try { localStorage.setItem("vt", on ? "1" : "0"); } catch (e) { /* private window: not remembered */ }
+  }
+
+  const vtToggle = $("vt-toggle");
+  if (vtToggle) {
+    let on = false;
+    try { on = localStorage.getItem("vt") === "1"; } catch (e) { /* no storage */ }
+    vtToggle.checked = on;
+    setVtShown(on);
+    vtToggle.addEventListener("change", () => setVtShown(vtToggle.checked));
   }
 
   function renderNodes(nodes) {

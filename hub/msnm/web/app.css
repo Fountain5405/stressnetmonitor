@@ -259,3 +259,16 @@ footer {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* verification timings: hidden until the header toggle is on */
+.vt-toggle { font-size: 12px; color: var(--muted); margin-right: 8px; cursor: pointer; }
+.vt-toggle input { vertical-align: -2px; margin: 0 4px 0 0; }
+.vt, .vt-note { display: none; }
+body.show-vt .vt, body.show-vt .vt-note { display: block; }
+.vt-note { margin: -4px 0 12px; font-size: 12px; color: var(--muted); max-width: 70em; }
+.vt { margin-top: 10px; }
+.vt table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.vt th { text-align: left; font-weight: 600; color: var(--muted); padding: 2px 6px 2px 0; }
+.vt td { padding: 2px 6px 2px 0; vertical-align: top; }
+.vt td .v { font-family: var(--mono); font-size: 13px; }
+.vt td .s { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }

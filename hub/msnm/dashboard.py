@@ -519,6 +519,75 @@ def _rows(t: pa.Table | None):
             yield from batch.to_pylist()
 
 
+# Verification timings (the page's optional section): block processing time by block size, at the tip and
+# while syncing, over each node's whole history under its current build.
+VT_SMALL_MAX = 100_000    # block weight below this: a small block
+VT_LARGE_MIN = 1_000_000  # block weight from this: a large block
+VT_TIP_S = 900            # processed within this many seconds of the block's timestamp: at the tip
+VT_MIN_N = 5              # fewer blocks than this: no figure
+VT_INTERVAL_S = 3600
+
+
+def _build_spans(changes: list[tuple[float, tuple[str, ...]]], now: float) -> list[tuple[float, float]]:
+    """The time spans in which a node ran the build it runs now (stock before its first record)."""
+    periods = [(0.0, ())] + sorted(changes)
+    current = periods[-1][1] if periods[-1][0] <= now else next(m for s, m in reversed(periods) if s <= now)
+    spans = []
+    for i, (since, mods) in enumerate(periods):
+        end = periods[i + 1][0] if i + 1 < len(periods) else math.inf
+        if mods == current and since < end:
+            spans.append((since, end))
+    return spans
+
+
+def verify_stats(parquet_root: str, node_ids: list[str], builds: dict[str, list[tuple[float, tuple[str, ...]]]],
+                 now: float) -> dict[str, dict]:
+    """Per node: {small|large: {tip|sync: {n, p50, p90}}} of block_processing_ms, None where under VT_MIN_N blocks.
+    Blocks are classed by their weight in ref_block (heights it lacks are skipped)."""
+    rb, bt = _dataset(parquet_root, "ref_block"), _dataset(parquet_root, "block_timing")
+    if rb is None or bt is None:
+        return {}
+    ref = rb.to_table(columns=["height", "block_weight", "timestamp"]).group_by("height").aggregate(
+        [("block_weight", "max"), ("timestamp", "min")]).rename_columns(["height", "weight", "stamp"])
+    ref = ref.set_column(2, "stamp", pc.cast(ref["stamp"], pa.int64()))
+    lo = pc.min(ref["height"]).as_py()
+    out = {}
+    for nid in node_ids:
+        t = bt.scanner(columns=["height", "time", "block_processing_ms"],
+                       filter=(pc.field("node_id") == nid) & (pc.field("height") >= lo),
+                       batch_readahead=4, fragment_readahead=2).to_table()
+        t = t.filter(pc.is_valid(t["block_processing_ms"]))
+        if t.num_rows == 0:
+            continue
+        secs = pc.cast(pc.cast(t["time"], pa.timestamp("s", tz="UTC"), safe=False), pa.int64())
+        t = t.set_column(1, "time", secs).join(ref, "height", join_type="inner")
+        keep = None
+        for a, b in _build_spans(builds.get(nid, []), now):
+            m = pc.greater_equal(t["time"], int(a))
+            if b != math.inf:
+                m = pc.and_(m, pc.less(t["time"], int(b)))
+            keep = m if keep is None else pc.or_(keep, m)
+        t = t.filter(keep)
+        tip = pc.less_equal(pc.subtract(t["time"], t["stamp"]), VT_TIP_S)
+        node = {}
+        for size, sel in (("small", pc.less(t["weight"], VT_SMALL_MAX)),
+                          ("large", pc.greater_equal(t["weight"], VT_LARGE_MIN))):
+            node[size] = {}
+            for mode, m in (("tip", tip), ("sync", pc.invert(tip))):
+                ms = t["block_processing_ms"].filter(pc.and_(sel, m))
+                if len(ms) < VT_MIN_N:
+                    node[size][mode] = None
+                    continue
+                p50, p90 = pc.quantile(ms, q=[0.5, 0.9]).to_pylist()
+                node[size][mode] = {"n": len(ms), "p50": round(p50), "p90": round(p90)}
+        out[nid] = node
+    del t
+    pool = pa.default_memory_pool()
+    if hasattr(pool, "release_unused"):
+        pool.release_unused()
+    return out
+
+
 def load_history(parquet_root: str, until: float, window_s: float = WINDOW_S) -> History:
     """History from the Parquet tables for the `window_s` before `until` (the
     hub's start time; later rows reach History live). Runs in a worker thread."""
@@ -613,6 +682,8 @@ class Dashboard:
         self.sidecar_latest = sidecar_version(sidecar_latest)
         self.mods = dict(mods or {})
         self._cache: dict[str, tuple[float, bytes, bytes]] = {}
+        self.vt: dict[str, dict] = {}     # verify_stats() result, refreshed by the server about hourly
+        self.vt_at: float | None = None
         self._id_cache: tuple[tuple, dict[str, str]] = ((), {})
         self._static = self._load_static()
 
@@ -812,7 +883,19 @@ class Dashboard:
             "network": network,
             "blocks": recent,
             "nodes": [self._node(nl, now, last30_blocks) for nl in self._visible()],
+            "vt": {"small_max_weight": VT_SMALL_MAX, "large_min_weight": VT_LARGE_MIN, "tip_s": VT_TIP_S,
+                   "at": _num(self.vt_at, 0)},
         }
+
+    def vt_inputs(self, now: float) -> tuple[list[str], dict[str, list[tuple[float, tuple[str, ...]]]]]:
+        """What verify_stats() needs, read on the event loop (the registry is not shared with threads)."""
+        builds: dict[str, list[tuple[float, tuple[str, ...]]]] = defaultdict(list)
+        for b in self.registry.builds():
+            builds[b.node_id].append((b.since, b.mods))
+        return [nl.node.node_id for nl in self._visible()], dict(builds)
+
+    def set_vt(self, stats: dict[str, dict], at: float) -> None:
+        self.vt, self.vt_at = stats, at
 
     def _node(self, nl: NodeLive, now: float, last30: list[dict]) -> dict:
         nid = nl.node.node_id
@@ -832,6 +915,7 @@ class Dashboard:
             "sidecar": sidecar,
             "sidecar_update": version_newer(self.sidecar_latest, sidecar),
             "experimental": self._experimental(nid, now),
+            "vt": self.vt.get(nid),
             "rpc": self.history.rpc_stats(nid, now),
             "version": clean(info.get("version"), 40),
             "state": nl.state,

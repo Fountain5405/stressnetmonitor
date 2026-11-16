@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import math
 import time
 
 import pytest
@@ -9,7 +10,7 @@ from msnm.chain import Chain, RefConfig
 from msnm.config import load
 from msnm import cpudb
 from msnm.dashboard import (ID_ALPHABET, Dashboard, DashboardConfig, History, disk_band, hardware, load_history,
-                            public_id, ram_class)
+                            public_id, ram_class, _build_spans, verify_stats)
 from msnm.live import Monitor, Thresholds
 from msnm.registry import Registry
 from msnm.tables import ParquetSink
@@ -405,3 +406,62 @@ def test_experimental_badge_and_markers(tmp_path):
     blob = json.dumps(live) + json.dumps(h)
     assert "zz-secret-label" not in blob and "lowmem-v2" not in blob
     assert not any(s in blob for s in SECRETS + INTERNAL)
+
+
+def test_build_spans():
+    assert _build_spans([], 50.0) == [(0.0, math.inf)]
+    ch = [(100, ("a",)), (200, ()), (300, ("a",))]
+    assert _build_spans(ch, 400) == [(100, 200), (300, math.inf)]
+    assert _build_spans(ch, 250) == [(0.0, 100), (200, 300)]
+
+
+def test_verify_stats(tmp_path):
+    root = tmp_path / "parquet"
+    sink = ParquetSink(str(root))
+    t0 = 1_700_000_000
+    stamp = {h: t0 + h * 120 for h in range(1000, 1030)}
+    for h, ts in stamp.items():
+        sink.add("ref_block", {"ref_id": "ref-a", "first_seen": _t(ts + 1), "height": h, "hash": f"{h:064x}",
+                               "timestamp": float(ts), "block_weight": 237.0 if h < 1015 else 2_000_000.0})
+    sink.add("ref_block", {"ref_id": "ref-b", "first_seen": _t(stamp[1000] + 2), "height": 1000,
+                           "hash": f"{1000:064x}", "timestamp": float(stamp[1000]), "block_weight": 237.0})
+
+    def bt(nid, h, secs, ms):
+        sink.add("block_timing", {"node_id": nid, "time": _t(secs), "height": h, "block_processing_ms": ms})
+
+    for h, ts in stamp.items():
+        small = h < 1015
+        bt("n1", h, ts + 5, 10.0 if small else 1000.0)
+        bt("n1", h, ts + 5000, 20.0 if small else 5000.0)
+    bt("n1", 999, t0 + 999 * 120 + 5, 77.0)     # below ref_block's minimum height
+    bt("n1", 2000, t0 + 2000 * 120 + 5, 77.0)   # not in ref_block
+    for h in (1000, 1001, 1002):
+        bt("n2", h, stamp[h] + 5, 10.0)
+    sink.flush()
+    out = verify_stats(str(root), ["n1", "n2"], {}, t0 + 10**6)
+    n1 = out["n1"]
+    assert (n1["small"]["tip"]["n"], n1["small"]["tip"]["p50"]) == (15, 10)
+    assert (n1["small"]["sync"]["n"], n1["small"]["sync"]["p50"]) == (15, 20)
+    assert (n1["large"]["tip"]["n"], n1["large"]["tip"]["p50"]) == (15, 1000)
+    assert (n1["large"]["sync"]["n"], n1["large"]["sync"]["p50"]) == (15, 5000)
+    assert out["n2"]["small"]["tip"] is None
+    # only rows from the build's start count: t_mid lies between the tip and the sync rows
+    t_mid = stamp[1029] + 100
+    cut = verify_stats(str(root), ["n1"], {"n1": [(t_mid, ("x",))]}, t0 + 10**6)["n1"]
+    assert cut["small"]["tip"] is None and cut["large"]["tip"] is None
+    assert cut["small"]["sync"]["n"] == 15 and cut["large"]["sync"]["n"] == 15
+
+
+def test_live_has_vt(tmp_path):
+    dash, mon, chain, reg, hist, now = _world(tmp_path)
+    for nid in ("ref-a", "vol-01"):
+        _node(mon, reg, nid, 100)
+    mon.evaluate()
+    vt = {"small": {"tip": {"n": 9, "p50": 1, "p90": 2}, "sync": None}, "large": {"tip": None, "sync": None}}
+    dash.set_vt({"vol-01": vt}, 123.0)
+    live = dash.build_live(time.time())
+    assert live["vt"]["small_max_weight"] == 100000 and live["vt"]["at"] == 123
+    by_id = {n["id"]: n for n in live["nodes"]}
+    assert by_id[dash.public("vol-01")]["vt"] == vt
+    assert by_id[dash.public("ref-a")]["vt"] is None
+    assert not any(s in json.dumps(live) for s in SECRETS + INTERNAL)

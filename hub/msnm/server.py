@@ -27,7 +27,7 @@ from prometheus_client.exposition import CONTENT_TYPE_LATEST
 from . import zmqsub
 from .chain import Chain
 from .config import Config
-from .dashboard import Dashboard, History, load_history
+from .dashboard import VT_INTERVAL_S, Dashboard, History, load_history, verify_stats
 from .live import Monitor
 from .rawstore import RawStore
 from .records import BatchError, ParserState, parse_batch, parse_header
@@ -246,6 +246,21 @@ class Hub:
         self.history.merge(old)
         log.info("dashboard: loaded history from Parquet in %.1fs", time.time() - t0)
 
+    async def _vt_loop(self) -> None:
+        """Recompute the dashboard's verification timings from Parquet about hourly (a whole-history scan)."""
+        await asyncio.sleep(120)
+        while True:
+            t0 = time.time()
+            try:
+                ids, builds = self.dashboard.vt_inputs(t0)
+                stats = await asyncio.to_thread(verify_stats, os.path.join(self.cfg.data_dir, "parquet"),
+                                                ids, builds, t0)
+                self.dashboard.set_vt(stats, t0)
+                log.info("dashboard: verification timings for %d nodes in %.1fs", len(stats), time.time() - t0)
+            except Exception:  # noqa: BLE001 - the page then keeps the previous figures
+                log.exception("dashboard: verification timings failed")
+            await asyncio.sleep(VT_INTERVAL_S)
+
     async def _flush_loop(self) -> None:
         last_snapshot = 0.0
         while True:
@@ -284,6 +299,7 @@ class Hub:
             else:
                 log.info("dashboard on %s:%d", self.cfg.dashboard.host, self.cfg.dashboard.port)
                 self._tasks.append(asyncio.create_task(self._load_history(), name="dashboard-history"))
+                self._tasks.append(asyncio.create_task(self._vt_loop(), name="dashboard-vt"))
 
         self._tasks.append(asyncio.create_task(self.chain.run(), name="chain"))
         self._tasks.append(asyncio.create_task(self._evaluate_loop(), name="evaluate"))

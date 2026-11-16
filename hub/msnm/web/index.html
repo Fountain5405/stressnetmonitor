@@ -23,6 +23,7 @@
     </div>
   </div>
   <div class="status">
+    <label class="vt-toggle"><input type="checkbox" id="vt-toggle"> verification timings</label>
     <span class="conn" id="conn">connecting…</span>
     <span class="clock mono" id="clock">--:--:--</span><small>UTC</small>
   </div>
@@ -85,6 +86,7 @@
 
   <section aria-label="Nodes">
     <h2>Monitored nodes <small id="nodes-note">arbitrary IDs · updated every 5 s</small></h2>
+    <p class="vt-note">Verification timings: each node's block processing time, from its own log, over its whole history with the build it runs now; the median, then the 90th percentile and the number of blocks. Small blocks weigh under 100 kB, large ones 1 MB or more. <b>At the tip</b>: processed within 15 minutes of the block's timestamp, so most of its transactions were already checked when they entered the node's pool. <b>Syncing</b>: processed later, with every transaction checked in the block. Recomputed hourly.</p>
     <div class="nodes" id="nodes"></div>
   </section>
 
