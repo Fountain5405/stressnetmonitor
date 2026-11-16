@@ -1005,7 +1005,9 @@ class Dashboard:
                 s["rpc"].append(_num(b[RPC] * 1000, 2) if b[RPC] is not None else None)   # ms
             series[ids[nid]] = s
 
-        src = hist.tx_in.get(ref_id or "") or max(hist.tx_in.values(), key=len, default={})
+        # Arrivals at the canonical reference only. Never fall back to another node: a syncing node
+        # announces every transaction of the old blocks it replays, which is not network traffic.
+        src = hist.tx_in.get(ref_id or "", {})
         first = min(src) if src else None
         tx_in = [None if first is None or m < first or m == m_end else src.get(m, 0) for m in mins]
 

@@ -180,6 +180,18 @@ def test_history_series(tmp_path):
     assert live["nodes"][0]["ms_med"] == 812.5 and live["network"]["tx_in_per_min"] == 0.8
 
 
+def test_history_tx_in_reference_only(tmp_path):
+    # A syncing node's ZMQ announces the transactions of the old blocks it replays; that is not traffic.
+    dash, mon, chain, reg, hist, now = _world(tmp_path)
+    _node(mon, reg, "vol-01", 100)
+    mon.evaluate()
+    base = int(now // 60) * 60 - 600
+    hist.on_zmq_tx("vol-01", 1320, base)
+    mins = dash.build_history(now)["minutes"]
+    assert all(v is None for v in mins["tx_in"])
+    assert dash.build_live(now)["network"]["tx_in_per_min"] is None
+
+
 def test_load_history_from_parquet(tmp_path):
     root = tmp_path / "parquet"
     sink = ParquetSink(str(root))
